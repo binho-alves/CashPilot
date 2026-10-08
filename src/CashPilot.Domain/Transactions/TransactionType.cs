@@ -15,4 +15,6 @@ public enum TransactionType
     /// the expense is only the fee, recorded separately as interest ("Saque Cartão").
     /// </summary>
     CardCashAdvance = 5,
+    /// <summary>Money received on a bank account (salary, Pix received...). Not spending and not a refund: the spending report ignores it.</summary>
+    Deposit = 6,
 }

@@ -17,6 +17,8 @@ public enum RuleKind
     Ambiguous = 3,
     /// <summary>Normalized description of a card-terminal cash-out charge (gross amount): not spending.</summary>
     CashOut = 4,
+    /// <summary>Normalized description of a transfer between the owner's own accounts (has a payee, so it is safe to remember).</summary>
+    OwnTransfer = 5,
 }
 
 /// <summary>
@@ -95,6 +97,73 @@ public sealed class CashPilotStore : IDisposable
         return command.ExecuteNonQuery() == 1;
     }
 
+    /// <summary>
+    /// Whether an entry with this dedup key was ever stored, including ones the user deleted
+    /// (a deleted entry must not come back when the same file is imported again).
+    /// </summary>
+    public bool DedupKeyExists(string dedupKey)
+    {
+        using var command = CreateCommand("SELECT 1 FROM transactions WHERE dedup_key = $key LIMIT 1;");
+        command.Parameters.AddWithValue("$key", dedupKey);
+        return command.ExecuteScalar() is not null;
+    }
+
+    private static readonly HashSet<string> TransferWords =
+        new(StringComparer.Ordinal) { "PIX", "TED", "DOC", "TRANSF", "TRANSFERENCIA" };
+
+    /// <summary>
+    /// Finds Pix/TED/transfer entries that leave one account and arrive in another with the same amount within
+    /// a few days, and marks both as internal transfers (neither spending nor income). Returns how many pairs were found.
+    /// </summary>
+    public int MarkInternalTransfers()
+    {
+        var candidates = GetAll()
+            .Where(t => t.NormalizedDescription.Split(' ').Any(word => TransferWords.Contains(word)))
+            .ToList();
+
+        var pairs = TransferDetector.Detect(candidates);
+        foreach (var id in pairs.SelectMany(p => new[] { p.OutgoingId, p.IncomingId }))
+        {
+            using var command = CreateCommand(
+                "UPDATE transactions SET type = $type, category = NULL, item = NULL WHERE id = $id;");
+            command.Parameters.AddWithValue("$type", (int)TransactionType.InternalTransfer);
+            command.Parameters.AddWithValue("$id", id.ToString());
+            command.ExecuteNonQuery();
+        }
+        return pairs.Count;
+    }
+
+    /// <summary>
+    /// The user says an entry only moved money between their own accounts: it stops being pending and is neither
+    /// spending nor income. Returns false when nothing matched.
+    /// </summary>
+    public bool MarkEntryInternalTransfer(Guid id)
+    {
+        using var command = CreateCommand(
+            "UPDATE transactions SET type = $type, category = NULL, item = NULL WHERE id = $id AND deleted = 0;");
+        command.Parameters.AddWithValue("$type", (int)TransactionType.InternalTransfer);
+        command.Parameters.AddWithValue("$id", id.ToString());
+        return command.ExecuteNonQuery() > 0;
+    }
+
+    /// <summary>
+    /// Marks every pending entry with this description as a transfer between the owner's accounts. A description with
+    /// a payee is remembered, so future imports do the same; a bare "PIX ENVIADO" is not. Returns how many changed.
+    /// </summary>
+    public int MarkInternalTransfer(string description)
+    {
+        var normalized = DescriptionNormalizer.Normalize(description);
+        if (normalized.Length == 0) return 0;
+        if (!TransferDetector.IsGeneric(normalized)) SaveRule(RuleKind.OwnTransfer, normalized, new Classification("", ""));
+
+        var updated = 0;
+        foreach (var pending in GetPending().Where(t => t.NormalizedDescription == normalized))
+            if (MarkEntryInternalTransfer(pending.Id)) updated++;
+        return updated;
+    }
+
+    public HashSet<string> GetOwnTransferPatterns() => GetPatterns(RuleKind.OwnTransfer);
+
     public int Count()
     {
         using var command = CreateCommand("SELECT COUNT(*) FROM transactions WHERE deleted = 0;");
@@ -105,7 +174,7 @@ public sealed class CashPilotStore : IDisposable
 
     /// <summary>Spending/income without a category yet: the queue the user classifies (and the classifier learns from).</summary>
     public IReadOnlyList<Transaction> GetPending() => Query(
-        "SELECT * FROM transactions WHERE deleted = 0 AND category IS NULL AND type IN (0, 1, 2) ORDER BY date, rowid;");
+        "SELECT * FROM transactions WHERE deleted = 0 AND category IS NULL AND type IN (0, 1, 2, 6) ORDER BY date, rowid;");
 
     /// <summary>Records the user's decision for every stored entry with this normalized description, and teaches the rule.</summary>
     public int Classify(string description, Classification classification)
@@ -456,11 +525,13 @@ public sealed class CashPilotStore : IDisposable
         return command.ExecuteNonQuery() > 0;
     }
 
-    public HashSet<string> GetCashOutPatterns()
+    public HashSet<string> GetCashOutPatterns() => GetPatterns(RuleKind.CashOut);
+
+    private HashSet<string> GetPatterns(RuleKind kind)
     {
         var patterns = new HashSet<string>(StringComparer.Ordinal);
         using var command = CreateCommand("SELECT pattern FROM classification_rules WHERE kind = $kind;");
-        command.Parameters.AddWithValue("$kind", (int)RuleKind.CashOut);
+        command.Parameters.AddWithValue("$kind", (int)kind);
         using var reader = command.ExecuteReader();
         while (reader.Read()) patterns.Add(reader.GetString(0));
         return patterns;

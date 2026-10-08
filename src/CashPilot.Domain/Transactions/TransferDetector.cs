@@ -8,13 +8,20 @@ public sealed record TransferPair(Guid OutgoingId, Guid IncomingId);
 /// </summary>
 public static class TransferDetector
 {
+    /// <summary>
+    /// "PIX ENVIADO" / "PIX RECEBIDO" with no payee: says nothing about where the money went, so it is never
+    /// classified or remembered as a rule automatically.
+    /// </summary>
+    public static bool IsGeneric(string normalizedDescription) =>
+        normalizedDescription is "PIX ENVIADO" or "PIX RECEBIDO";
+
     public static IReadOnlyList<TransferPair> Detect(
         IEnumerable<Transaction> transactions,
         int windowDays = 3)
     {
         var candidates = transactions
             .Where(t => t.Amount != 0
-                        && t.Type is TransactionType.Undefined or TransactionType.Expense or TransactionType.Income)
+                        && t.Type is TransactionType.Undefined or TransactionType.Expense or TransactionType.Income or TransactionType.Deposit)
             .ToList();
 
         var incoming = candidates.Where(t => t.Amount > 0).ToList();

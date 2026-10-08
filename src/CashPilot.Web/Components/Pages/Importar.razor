@@ -1,4 +1,6 @@
 @page "/importar"
+@using System.Globalization
+@using CashPilot.Domain.Transactions
 @using CashPilot.Infrastructure.Importing
 @inject CashPilotStore Store
 @inject ToastService Toasts
@@ -6,6 +8,80 @@
 <PageTitle>Importar — CashPilot</PageTitle>
 
 <h1>Importar</h1>
+
+<section class="card-box wide">
+    <h2>Enviar arquivo</h2>
+    <p class="muted">
+        CSV, TXT ou PDF (com texto). O tipo é reconhecido sozinho: extrato do Bradesco (CSV ou PDF), extrato do Itaú (PDF)
+        ou a planilha de gastos. Os extratos mostram uma prévia antes de gravar; o que já foi importado, ou que parece
+        repetir um lançamento que você já tem, não entra de novo.
+    </p>
+    <InputFile OnChange="LoadFile" accept=".csv,.txt,.pdf,text/csv,text/plain,application/pdf" />
+    @if (_fileMessage is not null)
+    {
+        <p class="muted">@_fileMessage</p>
+    }
+
+    @if (_statement is not null)
+    {
+        <h3>@_fileName: extrato @_statement.Format, @_statement.Entries.Count lançamentos (@StatementPeriod)</h3>
+        <div class="filters">
+            <label>Conta do extrato
+                <input list="dl-sources" @bind="_bankAccount" placeholder="ex.: Banco Bradesco PF" />
+            </label>
+            <button @onclick="BuildPreview">Ver prévia</button>
+        </div>
+        @foreach (var warning in _statement.Warnings)
+        {
+            <p class="error">@warning</p>
+        }
+        <Rejected Items="_statement.Rejected" />
+
+        @if (_preview is not null)
+        {
+            <ul class="result">
+                <li><strong>@_preview.Count(CandidateStatus.New)</strong> novos</li>
+                <li><strong>@_preview.Count(CandidateStatus.Duplicate)</strong> já importados</li>
+                <li><strong>@_preview.Count(CandidateStatus.Similar)</strong> parecem lançamentos que você já tem (vêm desmarcados; marque os que forem diferentes)</li>
+            </ul>
+            <div class="scroll">
+                <table class="grid">
+                    <thead>
+                        <tr><th></th><th>Data</th><th>Descrição</th><th class="num">Valor</th><th>Classificação</th><th>Situação</th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var c in _preview.Candidates)
+                        {
+                            <tr class="@(c.Status == CandidateStatus.New ? "" : "dim")">
+                                <td><input type="checkbox" checked="@_included.Contains(c.Index)"
+                                           disabled="@(c.Status == CandidateStatus.Duplicate)"
+                                           @onchange="e => Toggle(c.Index, e.Value is true)" /></td>
+                                <td>@c.Entry.Date.ToString("dd/MM/yyyy")</td>
+                                <td>@c.Transaction.RawDescription</td>
+                                <td class="num @(c.Entry.Amount < 0 ? "neg" : "")">@c.Entry.Amount.ToString("N2", Br)</td>
+                                <td>@Describe(c.Transaction)</td>
+                                <td>@StatusText(c)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            <p><button class="primary" @onclick="ConfirmImport">Importar @_included.Count lançamentos para @_preview.Account</button></p>
+        }
+    }
+
+    @if (_bankResult is not null)
+    {
+        <ul class="result">
+            <li><strong>@_bankResult.Inserted</strong> lançamentos importados, <strong>@_bankResult.Skipped</strong> deixados de fora</li>
+            @if (_bankResult.TransferPairs > 0)
+            {
+                <li><strong>@_bankResult.TransferPairs</strong> transferências entre suas contas reconhecidas (não contam como gasto)</li>
+            }
+            <li>o que não foi classificado está em <a href="pendentes">Pendentes</a>: lá você cadastra o gasto ou marca "Entre minhas contas"</li>
+        </ul>
+    }
+</section>
 
 <section class="card-box">
     <h2>Planilha de gastos (CSV)</h2>
@@ -85,6 +161,135 @@
 }
 
 @code {
+    private const long MaxFileBytes = 10 * 1024 * 1024;
+    private static readonly CultureInfo Br = new("pt-BR");
+
+    private BankStatement? _statement;
+    private BankPreview? _preview;
+    private BankImportResult? _bankResult;
+    private readonly HashSet<int> _included = new();
+    private string _bankAccount = "";
+    private string _fileName = "";
+    private string? _fileMessage;
+
+    private string StatementPeriod => _statement is { Entries.Count: > 0 }
+        ? $"{_statement.Entries.Min(e => e.Date):dd/MM/yyyy} a {_statement.Entries.Max(e => e.Date):dd/MM/yyyy}"
+        : "sem lançamentos";
+
+    private async Task LoadFile(InputFileChangeEventArgs e)
+    {
+        _error = null;
+        _fileMessage = null;
+        _statement = null;
+        _preview = null;
+        _bankResult = null;
+        _included.Clear();
+
+        byte[] bytes;
+        try
+        {
+            using var stream = e.File.OpenReadStream(MaxFileBytes);
+            using var memory = new MemoryStream();
+            await stream.CopyToAsync(memory);
+            bytes = memory.ToArray();
+        }
+        catch (IOException ex)
+        {
+            _error = "Não foi possível ler o arquivo (limite 10 MB): " + ex.Message;
+            return;
+        }
+
+        _fileName = e.File.Name;
+        var loaded = ImportFileLoader.Load(_fileName, bytes);
+        switch (loaded.Kind)
+        {
+            case ImportKind.BankStatement:
+                _statement = loaded.Statement;
+                var suggested = new BankStatementImporter(Store).SuggestAccounts(_statement!);
+                _bankAccount = suggested.Count == 1 ? suggested[0] : "";
+                if (_bankAccount.Length > 0) BuildPreview();
+                else _fileMessage = "Extrato reconhecido. Escolha a conta e clique em Ver prévia.";
+                break;
+
+            case ImportKind.GastosSheet:
+                try
+                {
+                    _gastos = new GastosImporter(Store).Import(new StringReader(loaded.Text!), _fileName);
+                    _fileMessage = "Planilha de gastos reconhecida e importada (resultado na seção da planilha, abaixo).";
+                    Toasts.Success($"Planilha importada: {_gastos.Inserted} novas, {_gastos.Duplicates} já existiam.");
+                }
+                catch (Exception ex) when (ex is InvalidDataException or FormatException)
+                {
+                    _error = ex.Message;
+                }
+                break;
+
+            case ImportKind.PlainText:
+                _pasted = loaded.Text!;
+                _fileMessage = "Texto reconhecido, mas sem formato de extrato conhecido. Ele foi para a caixa "
+                               + "\"Fatura de cartão ou extrato (texto)\", mais abaixo: escolha a conta ou o cartão e importe lá.";
+                break;
+
+            default:
+                _error = loaded.Error ?? "Arquivo não reconhecido.";
+                break;
+        }
+    }
+
+    private void BuildPreview()
+    {
+        _error = null;
+        _preview = null;
+        _bankResult = null;
+        if (_statement is null) return;
+        if (string.IsNullOrWhiteSpace(_bankAccount)) { _error = "Escolha a conta do extrato."; return; }
+
+        var importer = new BankStatementImporter(Store);
+        _preview = importer.Preview(_statement, _bankAccount);
+        _included.Clear();
+        foreach (var candidate in _preview.Candidates.Where(c => c.Status == CandidateStatus.New))
+            _included.Add(candidate.Index);
+    }
+
+    private void Toggle(int index, bool on)
+    {
+        if (on) _included.Add(index);
+        else _included.Remove(index);
+    }
+
+    private void ConfirmImport()
+    {
+        if (_preview is null) return;
+        _bankResult = new BankStatementImporter(Store).Import(
+            _preview, _included, "extrato:" + _fileName);
+        Toasts.Success($"{_bankResult.Inserted} lançamentos importados em {_preview.Account}.");
+        _sources = Store.GetAccounts().Select(a => a.Name)
+            .Concat(Store.GetAccountNamesInUse())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(n => n, StringComparer.CurrentCultureIgnoreCase)
+            .ToList();
+        _preview = null;
+        _statement = null;
+        _included.Clear();
+    }
+
+    private static string Describe(Transaction transaction) => transaction.Type switch
+    {
+        TransactionType.CardBillPayment => "Pagamento de fatura (não é gasto)",
+        TransactionType.InternalTransfer => "Entre minhas contas",
+        _ when transaction.Category is not null =>
+            string.IsNullOrEmpty(transaction.Item) ? transaction.Category : $"{transaction.Category} › {transaction.Item}",
+        TransactionType.Deposit => "A classificar (entrada)",
+        _ => "A classificar",
+    };
+
+    private static string StatusText(BankCandidate candidate) => candidate.Status switch
+    {
+        CandidateStatus.New => "novo",
+        CandidateStatus.Duplicate => "já importado",
+        _ => candidate.Note ?? "parece repetido",
+    };
+
     private const long MaxBytes = 5 * 1024 * 1024;
 
     private ImportResult? _gastos;

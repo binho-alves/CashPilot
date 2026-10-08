@@ -50,6 +50,7 @@ R$ 1,000 at 3.09% (1x): cost R$ 30.90, net R$ 969.10. The fee table by number of
 2. Accounts, limits, bills and per-account interest rules
    - "Bills to pay" screen: everything due, shown next to the bank accounts and balances (where to take the money from)
    - Overdraft (LIS) settings per account: interest-free days and interest rate
+   - Statement import with preview (Bradesco CSV/PDF, Itaú PDF; OFX, other banks and images next), transfer pairing between own accounts, soft delete
 3. Payment calendar, cash-flow forecast and cost simulator
 4. C# API and mobile app
 

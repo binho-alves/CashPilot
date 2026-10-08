@@ -22,7 +22,8 @@ else
     <p class="muted">
         @_rows.Count descrições, @_rows.Sum(r => r.Entries.Count) lançamentos.
         Classificar uma descrição ensina o sistema: as próximas importações já entram classificadas.
-        Use "Ver" para conferir datas e contas, ou excluir um lançamento duplicado.
+        Use "Ver" para conferir datas e contas, excluir um lançamento duplicado ou marcar um lançamento como
+        "Entre contas" (dinheiro que só trocou de conta). Pix sem favorecido só se marca um a um, dentro de "Ver".
     </p>
 
     <table class="grid">
@@ -64,6 +65,10 @@ else
                     <td class="actions">
                         <button class="primary" @onclick="() => Save(row)">Salvar</button>
                         <button title="Cobrança bruta de saque na maquininha: não é gasto" @onclick="() => MarkCashOut(row)">Saque</button>
+                        @if (!TransferDetector.IsGeneric(row.Normalized))
+                        {
+                            <button title="Dinheiro que só mudou de uma conta minha para outra: não é gasto nem entrada" @onclick="() => MarkTransfer(row)">Entre contas</button>
+                        }
                         <button @onclick="() => row.Open = !row.Open">@(row.Open ? "Ocultar" : "Ver")</button>
                         @if (row.Error is not null)
                         {
@@ -94,6 +99,7 @@ else
                                             }
                                             else
                                             {
+                                                <button title="Dinheiro que só mudou de uma conta minha para outra: não é gasto nem entrada" @onclick="() => MarkEntryTransfer(entry)">Entre contas</button>
                                                 <button @onclick="() => _confirmDelete = entry.Id">Excluir</button>
                                             }
                                         </td>
@@ -183,6 +189,19 @@ else
     {
         var updated = Store.MarkCashOut(row.Description);
         Toasts.Success($"Marcado como saque na maquininha ({updated} lançamento(s)); não conta como gasto.");
+        Reload();
+    }
+
+    private void MarkTransfer(PendingRow row)
+    {
+        var updated = Store.MarkInternalTransfer(row.Description);
+        Toasts.Success($"{updated} lançamento(s) marcados como entre minhas contas; não contam como gasto nem entrada.");
+        Reload();
+    }
+
+    private void MarkEntryTransfer(Transaction entry)
+    {
+        if (Store.MarkEntryInternalTransfer(entry.Id)) Toasts.Success("Marcado como entre minhas contas.");
         Reload();
     }
 
