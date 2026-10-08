@@ -1,6 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.0" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.12" />
+    <!-- Microsoft.Data.Sqlite pulls the native SQLite from SQLitePCLRaw 2.1.11 (CVE-2025-6965, SQLite < 3.50.2).
+         Naming the native package here makes NuGet use this newer one everywhere. -->
+    <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.13" />
     <PackageReference Include="PdfPig" Version="0.1.9" />
     <PackageReference Include="Tesseract" Version="5.2.0" />
   </ItemGroup>
