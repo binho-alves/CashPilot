@@ -1,0 +1,172 @@
+@page "/lancamentos"
+@inject CashPilotStore Store
+
+<PageTitle>Lançamentos — CashPilot</PageTitle>
+
+<h1>Lançamentos</h1>
+
+<datalist id="dl-categories">
+    @foreach (var category in _categories)
+    {
+        <option value="@category"></option>
+    }
+</datalist>
+
+<div class="filters">
+    <label>Mês
+        <select @bind="_month">
+            <option value="">Todos</option>
+            @foreach (var m in _months)
+            {
+                <option value="@m">@m</option>
+            }
+        </select>
+    </label>
+    <label>Conta
+        <select @bind="_account">
+            <option value="">Todas</option>
+            @foreach (var a in _accounts)
+            {
+                <option value="@a">@a</option>
+            }
+        </select>
+    </label>
+    <label>Categoria
+        <select @bind="_category">
+            <option value="">Todas</option>
+            <option value="@Uncat">(sem categoria)</option>
+            @foreach (var c in _categories)
+            {
+                <option value="@c">@c</option>
+            }
+        </select>
+    </label>
+    <label>Busca
+        <input @bind="_search" @bind:event="oninput" placeholder="descrição" />
+    </label>
+</div>
+
+<p class="muted">
+    @Filtered.Count lançamentos, total @Filtered.Sum(t => t.Amount).ToString("N2", Br)
+    @if (Filtered.Count > Limit) { <span>(mostrando os primeiros @Limit)</span> }
+</p>
+
+<table class="grid">
+    <thead>
+        <tr>
+            <th>Data</th>
+            <th>Conta</th>
+            <th>Descrição</th>
+            <th class="num">Valor</th>
+            <th>Tipo</th>
+            <th>Categoria</th>
+            <th>Item</th>
+            <th></th>
+        </tr>
+    </thead>
+    <tbody>
+        @foreach (var t in Filtered.Take(Limit))
+        {
+            var edit = EditFor(t);
+            <tr @key="t.Id">
+                <td>@t.Date.ToString("dd/MM/yyyy")</td>
+                <td>@t.Account</td>
+                <td>@t.RawDescription@(t.InstallmentCount is > 1 ? $" ({t.InstallmentNumber}/{t.InstallmentCount})" : "")</td>
+                <td class="num">@t.Amount.ToString("N2", Br)</td>
+                <td>@TypeLabel(t.Type)</td>
+                @if (IsEditable(t))
+                {
+                    <td><input list="dl-categories" value="@edit.Category" @onchange="e => edit.Category = e.Value?.ToString() ?? string.Empty" /></td>
+                    <td><input value="@edit.Item" @onchange="e => edit.Item = e.Value?.ToString() ?? string.Empty" /></td>
+                    <td class="actions">
+                        <label class="muted" title="Vale também para as próximas importações e lançamentos pendentes iguais">
+                            <input type="checkbox" @bind="edit.Learn" /> aprender
+                        </label>
+                        <button class="primary" @onclick="() => Save(t, edit)">Salvar</button>
+                        @if (edit.Error is not null) { <span class="error">@edit.Error</span> }
+                    </td>
+                }
+                else
+                {
+                    <td colspan="3" class="muted">não conta como gasto</td>
+                }
+            </tr>
+        }
+    </tbody>
+</table>
+
+@code {
+    private const string Uncat = "__none__";
+    private const int Limit = 300;
+    private static readonly CultureInfo Br = new("pt-BR");
+
+    private sealed class EditState
+    {
+        public string Category { get; set; } = "";
+        public string Item { get; set; } = "";
+        public bool Learn { get; set; } = true;
+        public string? Error { get; set; }
+    }
+
+    private List<Transaction> _all = new();
+    private List<string> _months = new();
+    private List<string> _accounts = new();
+    private List<string> _categories = new();
+    private readonly Dictionary<Guid, EditState> _edits = new();
+
+    private string _month = "";
+    private string _account = "";
+    private string _category = "";
+    private string _search = "";
+
+    protected override void OnInitialized() => Reload();
+
+    private void Reload()
+    {
+        _all = Store.GetAll().OrderByDescending(t => t.Date).ToList();
+        _months = _all.Select(t => t.Date.ToString("yyyy-MM")).Distinct().OrderByDescending(m => m).ToList();
+        _accounts = _all.Select(t => t.Account).Distinct().OrderBy(a => a).ToList();
+        _categories = _all.Select(t => t.Category).Where(c => !string.IsNullOrEmpty(c)).Select(c => c!)
+            .Distinct().OrderBy(c => c).ToList();
+        _edits.Clear();
+    }
+
+    private List<Transaction> Filtered => _all.Where(t =>
+        (_month.Length == 0 || t.Date.ToString("yyyy-MM") == _month) &&
+        (_account.Length == 0 || t.Account == _account) &&
+        (_category.Length == 0 ||
+            (_category == Uncat ? string.IsNullOrEmpty(t.Category) : t.Category == _category)) &&
+        (_search.Length == 0 || t.RawDescription.Contains(_search, StringComparison.OrdinalIgnoreCase))).ToList();
+
+    private static bool IsEditable(Transaction t) =>
+        t.Type is TransactionType.Undefined or TransactionType.Expense or TransactionType.Income;
+
+    private EditState EditFor(Transaction t)
+    {
+        if (!_edits.TryGetValue(t.Id, out var state))
+            _edits[t.Id] = state = new EditState { Category = t.Category ?? "", Item = t.Item ?? "" };
+        return state;
+    }
+
+    private void Save(Transaction t, EditState edit)
+    {
+        if (string.IsNullOrWhiteSpace(edit.Category))
+        {
+            edit.Error = "Informe a categoria.";
+            return;
+        }
+
+        Store.ClassifyEntry(t.Id, new Classification(edit.Category.Trim(), edit.Item.Trim()), edit.Learn);
+        Reload();
+    }
+
+    private static string TypeLabel(TransactionType type) => type switch
+    {
+        TransactionType.Expense => "Gasto",
+        TransactionType.Income => "Receita",
+        TransactionType.InternalTransfer => "Transferência própria",
+        TransactionType.CardBillPayment => "Pagto. fatura",
+        TransactionType.CardCashAdvance => "Saque maquininha",
+        _ => "—",
+    };
+}

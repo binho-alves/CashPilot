@@ -1,0 +1,316 @@
+using System.Globalization;
+using CashPilot.Domain.Descriptions;
+using CashPilot.Domain.Transactions;
+using Microsoft.Data.Sqlite;
+
+namespace CashPilot.Infrastructure.Persistence;
+
+public enum RuleKind
+{
+    /// <summary>Taught from a classified description (exact normalized match, also feeds the similarity layer).</summary>
+    Exact = 1,
+    /// <summary>Manual "contains" rule.</summary>
+    Contains = 2,
+    /// <summary>The description was seen with different classifications, so it is asked about instead of guessed.</summary>
+    Ambiguous = 3,
+    /// <summary>Normalized description of a card-terminal cash-out charge (gross amount): not spending.</summary>
+    CashOut = 4,
+}
+
+/// <summary>
+/// SQLite store. Owns one open connection (use ":memory:" in tests).
+/// Money is stored as integer cents and dates as ISO text, to avoid floating point surprises.
+/// </summary>
+public sealed class CashPilotStore : IDisposable
+{
+    private readonly SqliteConnection _connection;
+    private SqliteTransaction? _transaction;
+
+    public CashPilotStore(string databasePath)
+    {
+        var connectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Pooling = false,
+        }.ToString();
+
+        _connection = new SqliteConnection(connectionString);
+        _connection.Open();
+        Schema.Apply(_connection);
+    }
+
+    /// <summary>Runs the work in a single database transaction (fast bulk import, all-or-nothing).</summary>
+    public void InTransaction(Action work)
+    {
+        if (_transaction is not null)
+            throw new InvalidOperationException("A transaction is already in progress.");
+
+        _transaction = _connection.BeginTransaction();
+        try
+        {
+            work();
+            _transaction.Commit();
+        }
+        catch
+        {
+            _transaction.Rollback();
+            throw;
+        }
+        finally
+        {
+            _transaction.Dispose();
+            _transaction = null;
+        }
+    }
+
+    /// <summary>Inserts the entry unless one with the same dedup key exists. Returns whether it was inserted.</summary>
+    public bool TryInsert(Transaction transaction, string dedupKey, string? source = null)
+    {
+        using var command = CreateCommand("""
+            INSERT OR IGNORE INTO transactions
+                (id, dedup_key, account, date, amount_cents, raw_description, category, item, type,
+                 installment_number, installment_count, source, imported_at)
+            VALUES
+                ($id, $key, $account, $date, $cents, $description, $category, $item, $type,
+                 $number, $count, $source, $importedAt);
+            """);
+        command.Parameters.AddWithValue("$id", transaction.Id.ToString());
+        command.Parameters.AddWithValue("$key", dedupKey);
+        command.Parameters.AddWithValue("$account", transaction.Account);
+        command.Parameters.AddWithValue("$date", transaction.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+        command.Parameters.AddWithValue("$cents", ToCents(transaction.Amount));
+        command.Parameters.AddWithValue("$description", transaction.RawDescription);
+        command.Parameters.AddWithValue("$category", (object?)transaction.Category ?? DBNull.Value);
+        command.Parameters.AddWithValue("$item", (object?)transaction.Item ?? DBNull.Value);
+        command.Parameters.AddWithValue("$type", (int)transaction.Type);
+        command.Parameters.AddWithValue("$number", (object?)transaction.InstallmentNumber ?? DBNull.Value);
+        command.Parameters.AddWithValue("$count", (object?)transaction.InstallmentCount ?? DBNull.Value);
+        command.Parameters.AddWithValue("$source", (object?)source ?? DBNull.Value);
+        command.Parameters.AddWithValue("$importedAt", DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture));
+        return command.ExecuteNonQuery() == 1;
+    }
+
+    public int Count()
+    {
+        using var command = CreateCommand("SELECT COUNT(*) FROM transactions;");
+        return Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture);
+    }
+
+    public IReadOnlyList<Transaction> GetAll() => Query("SELECT * FROM transactions ORDER BY date, rowid;");
+
+    /// <summary>Spending/income without a category yet: the queue the user classifies (and the classifier learns from).</summary>
+    public IReadOnlyList<Transaction> GetPending() => Query(
+        "SELECT * FROM transactions WHERE category IS NULL AND type IN (0, 1, 2) ORDER BY date, rowid;");
+
+    /// <summary>Records the user's decision for every stored entry with this normalized description, and teaches the rule.</summary>
+    public int Classify(string description, Classification classification)
+    {
+        var normalized = DescriptionNormalizer.Normalize(description);
+        SaveRule(RuleKind.Exact, normalized, classification);
+
+        using (var delete = CreateCommand("DELETE FROM classification_rules WHERE kind = $kind AND pattern = $pattern;"))
+        {
+            delete.Parameters.AddWithValue("$kind", (int)RuleKind.Ambiguous);
+            delete.Parameters.AddWithValue("$pattern", normalized);
+            delete.ExecuteNonQuery();
+        }
+
+        var updated = 0;
+        foreach (var pending in GetPending().Where(t => t.NormalizedDescription == normalized))
+        {
+            SetClassification(pending.Id, classification);
+            updated++;
+        }
+        return updated;
+    }
+
+    /// <summary>
+    /// Changes the classification of one stored entry (inline correction). With <paramref name="learn"/> the decision
+    /// also becomes the rule for that description, so future imports and other pending entries follow it.
+    /// </summary>
+    public void ClassifyEntry(Guid id, Classification classification, bool learn)
+    {
+        string? description = null;
+        using (var lookup = CreateCommand("SELECT raw_description FROM transactions WHERE id = $id;"))
+        {
+            lookup.Parameters.AddWithValue("$id", id.ToString());
+            description = lookup.ExecuteScalar() as string;
+        }
+        if (description is null) return;
+
+        SetClassification(id, classification);
+        if (learn) Classify(description, classification);
+    }
+
+    /// <summary>Applies the current rules (exact, contains, similarity) to every entry still without a category.</summary>
+    public int ReclassifyPending()
+    {
+        var classifier = BuildClassifier();
+        var updated = 0;
+        foreach (var pending in GetPending())
+        {
+            var result = classifier.Classify(pending.RawDescription);
+            if (!result.IsClassified) continue;
+            SetClassification(pending.Id, result.Classification!);
+            updated++;
+        }
+        return updated;
+    }
+
+    private void SetClassification(Guid id, Classification classification)
+    {
+        using var command = CreateCommand("UPDATE transactions SET category = $category, item = $item WHERE id = $id;");
+        command.Parameters.AddWithValue("$category", classification.Category);
+        command.Parameters.AddWithValue("$item", string.IsNullOrEmpty(classification.Item) ? DBNull.Value : (object)classification.Item);
+        command.Parameters.AddWithValue("$id", id.ToString());
+        command.ExecuteNonQuery();
+    }
+
+    /// <summary>
+    /// Marks every stored entry with this description as a card-terminal cash-out (not spending) and remembers
+    /// the description, so future imports mark it automatically. Returns how many stored entries changed.
+    /// </summary>
+    public int MarkCashOut(string description)
+    {
+        var normalized = DescriptionNormalizer.Normalize(description);
+        if (normalized.Length == 0) return 0;
+
+        SaveRule(RuleKind.CashOut, normalized, new Classification("", ""));
+
+        var updated = 0;
+        var candidates = GetAll().Where(t => t.NormalizedDescription == normalized
+                                             && t.Type is TransactionType.Undefined or TransactionType.Expense or TransactionType.Income);
+        foreach (var transaction in candidates)
+        {
+            using var command = CreateCommand(
+                "UPDATE transactions SET type = $type, category = NULL, item = NULL WHERE id = $id;");
+            command.Parameters.AddWithValue("$type", (int)TransactionType.CardCashAdvance);
+            command.Parameters.AddWithValue("$id", transaction.Id.ToString());
+            updated += command.ExecuteNonQuery();
+        }
+        return updated;
+    }
+
+    /// <summary>Every category/item pair already in use (entries and rules), for pick lists.</summary>
+    public IReadOnlyList<Classification> GetKnownClassifications()
+    {
+        var result = new List<Classification>();
+        using var command = CreateCommand("""
+            SELECT DISTINCT category, COALESCE(item, '') FROM transactions WHERE category IS NOT NULL
+            UNION
+            SELECT DISTINCT category, item FROM classification_rules WHERE kind IN (1, 2) AND category <> ''
+            ORDER BY 1, 2;
+            """);
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+            result.Add(new Classification(reader.GetString(0), reader.GetString(1)));
+        return result;
+    }
+
+    public HashSet<string> GetCashOutPatterns()
+    {
+        var patterns = new HashSet<string>(StringComparer.Ordinal);
+        using var command = CreateCommand("SELECT pattern FROM classification_rules WHERE kind = $kind;");
+        command.Parameters.AddWithValue("$kind", (int)RuleKind.CashOut);
+        using var reader = command.ExecuteReader();
+        while (reader.Read()) patterns.Add(reader.GetString(0));
+        return patterns;
+    }
+
+    public void SaveRule(RuleKind kind, string pattern, Classification classification)
+    {
+        var normalized = DescriptionNormalizer.Normalize(pattern);
+        if (normalized.Length == 0) return;
+
+        using var command = CreateCommand("""
+            INSERT INTO classification_rules (kind, pattern, category, item)
+            VALUES ($kind, $pattern, $category, $item)
+            ON CONFLICT (kind, pattern) DO UPDATE SET category = excluded.category, item = excluded.item;
+            """);
+        command.Parameters.AddWithValue("$kind", (int)kind);
+        command.Parameters.AddWithValue("$pattern", normalized);
+        command.Parameters.AddWithValue("$category", classification.Category);
+        command.Parameters.AddWithValue("$item", classification.Item);
+        command.ExecuteNonQuery();
+    }
+
+    /// <summary>Rebuilds the in-memory classifier from every rule saved so far.</summary>
+    public Classifier BuildClassifier()
+    {
+        var rules = new List<(RuleKind Kind, string Pattern, Classification Classification)>();
+        using (var command = CreateCommand("SELECT kind, pattern, category, item FROM classification_rules ORDER BY id;"))
+        using (var reader = command.ExecuteReader())
+        {
+            while (reader.Read())
+                rules.Add(((RuleKind)reader.GetInt32(0), reader.GetString(1),
+                    new Classification(reader.GetString(2), reader.GetString(3))));
+        }
+
+        var classifier = new Classifier();
+        foreach (var (kind, pattern, classification) in rules)
+        {
+            if (kind == RuleKind.Exact) classifier.Learn(pattern, classification);
+            else if (kind == RuleKind.Contains) classifier.AddContainsRule(pattern, classification);
+        }
+        // Ambiguity last, so a Learn during the rebuild cannot erase it.
+        foreach (var (kind, pattern, _) in rules)
+            if (kind == RuleKind.Ambiguous) classifier.MarkAmbiguous(pattern);
+
+        return classifier;
+    }
+
+    public void Dispose()
+    {
+        _transaction?.Dispose();
+        _connection.Dispose();
+    }
+
+    private SqliteCommand CreateCommand(string sql)
+    {
+        var command = _connection.CreateCommand();
+        command.CommandText = sql;
+        command.Transaction = _transaction;
+        return command;
+    }
+
+    private List<Transaction> Query(string sql)
+    {
+        var result = new List<Transaction>();
+        using var command = CreateCommand(sql);
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            result.Add(new Transaction
+            {
+                Id = Guid.Parse(reader.GetString(reader.GetOrdinal("id"))),
+                Account = reader.GetString(reader.GetOrdinal("account")),
+                Date = DateOnly.ParseExact(reader.GetString(reader.GetOrdinal("date")), "yyyy-MM-dd", CultureInfo.InvariantCulture),
+                Amount = FromCents(reader.GetInt64(reader.GetOrdinal("amount_cents"))),
+                RawDescription = reader.GetString(reader.GetOrdinal("raw_description")),
+                Category = NullableString(reader, "category"),
+                Item = NullableString(reader, "item"),
+                Type = (TransactionType)reader.GetInt32(reader.GetOrdinal("type")),
+                InstallmentNumber = NullableInt(reader, "installment_number"),
+                InstallmentCount = NullableInt(reader, "installment_count"),
+            });
+        }
+        return result;
+    }
+
+    private static string? NullableString(SqliteDataReader reader, string column)
+    {
+        var ordinal = reader.GetOrdinal(column);
+        return reader.IsDBNull(ordinal) ? null : reader.GetString(ordinal);
+    }
+
+    private static int? NullableInt(SqliteDataReader reader, string column)
+    {
+        var ordinal = reader.GetOrdinal(column);
+        return reader.IsDBNull(ordinal) ? null : reader.GetInt32(ordinal);
+    }
+
+    private static long ToCents(decimal amount) =>
+        (long)Math.Round(amount * 100m, 0, MidpointRounding.AwayFromZero);
+
+    private static decimal FromCents(long cents) => cents / 100m;
+}

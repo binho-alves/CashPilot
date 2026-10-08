@@ -7,22 +7,43 @@ namespace CashPilot.Domain.Tests;
 public class InterestAndImportTests
 {
     [Fact]
-    public void CashAdvanceOf1000At308PercentCosts3080AndNets96920()
+    public void CashAdvanceOf1000At309PercentCosts3090AndNets96910()
     {
         var advance = new CashAdvanceFeeTable().Simulate(1000m);
 
-        Assert.Equal(30.80m, advance.Cost);
-        Assert.Equal(969.20m, advance.Net);
+        Assert.Equal(30.90m, advance.Cost);
+        Assert.Equal(969.10m, advance.Net);
+    }
+
+    [Theory]
+    [InlineData(1, 30.90, 969.10)]
+    [InlineData(2, 57.90, 942.10)]
+    [InlineData(3, 60.90, 939.10)]
+    [InlineData(4, 79.90, 920.10)]
+    [InlineData(5, 80.90, 919.10)]
+    [InlineData(6, 81.90, 918.10)]
+    [InlineData(7, 94.90, 905.10)]
+    [InlineData(8, 96.80, 903.20)]
+    [InlineData(9, 103.70, 896.30)]
+    [InlineData(10, 110.50, 889.50)]
+    [InlineData(11, 122.70, 877.30)]
+    [InlineData(12, 123.80, 876.20)]
+    public void TerminalFeeTableMatchesTheTerminalApp(int installments, double cost, double net)
+    {
+        var advance = new CashAdvanceFeeTable().Simulate(1000m, installments);
+
+        Assert.Equal((decimal)cost, advance.Cost);
+        Assert.Equal((decimal)net, advance.Net);
     }
 
     [Fact]
     public void UnregisteredInstallmentFeeFailsClearly()
     {
         var table = new CashAdvanceFeeTable();
-        Assert.Throws<InvalidOperationException>(() => table.Simulate(1000m, installments: 3));
+        Assert.Throws<InvalidOperationException>(() => table.Simulate(1000m, installments: 13));
 
-        table.Set(3, 9.5m);
-        Assert.Equal(95m, table.Simulate(1000m, 3).Cost);
+        table.Set(13, 9.5m);
+        Assert.Equal(95m, table.Simulate(1000m, 13).Cost);
     }
 
     [Theory]

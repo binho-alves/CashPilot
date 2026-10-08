@@ -1,0 +1,131 @@
+@page "/pendentes"
+@inject CashPilotStore Store
+
+<PageTitle>Pendentes — CashPilot</PageTitle>
+
+<h1>Pendentes de classificação</h1>
+
+<datalist id="dl-categories">
+    @foreach (var category in _categories)
+    {
+        <option value="@category"></option>
+    }
+</datalist>
+
+@if (_rows.Count == 0)
+{
+    <p class="muted">Nada pendente.</p>
+}
+else
+{
+    <p class="muted">
+        @_rows.Count descrições, @_rows.Sum(r => r.Count) lançamentos.
+        Classificar uma descrição ensina o sistema: as próximas importações já entram classificadas.
+    </p>
+
+    <table class="grid">
+        <thead>
+            <tr>
+                <th>Descrição</th>
+                <th class="num">Qtde</th>
+                <th class="num">Total</th>
+                <th>Categoria</th>
+                <th>Item</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            @for (var i = 0; i < _rows.Count; i++)
+            {
+                var row = _rows[i];
+                var listId = "dl-items-" + i;
+                <tr @key="row.Normalized">
+                    <td>@row.Description</td>
+                    <td class="num">@row.Count</td>
+                    <td class="num">@row.Total.ToString("N2", Br)</td>
+                    <td>
+                        <input list="dl-categories" value="@row.Category" placeholder="Categoria"
+                               @onchange="e => row.Category = e.Value?.ToString() ?? string.Empty" />
+                    </td>
+                    <td>
+                        <input list="@listId" value="@row.Item" placeholder="Item"
+                               @onchange="e => row.Item = e.Value?.ToString() ?? string.Empty" />
+                        <datalist id="@listId">
+                            @foreach (var item in ItemsFor(row.Category))
+                            {
+                                <option value="@item"></option>
+                            }
+                        </datalist>
+                    </td>
+                    <td class="actions">
+                        <button class="primary" @onclick="() => Save(row)">Salvar</button>
+                        <button title="Cobrança bruta de saque na maquininha: não é gasto" @onclick="() => MarkCashOut(row)">Saque</button>
+                        @if (row.Error is not null)
+                        {
+                            <span class="error">@row.Error</span>
+                        }
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+@code {
+    private static readonly CultureInfo Br = new("pt-BR");
+
+    private sealed class PendingRow
+    {
+        public string Normalized { get; init; } = "";
+        public string Description { get; init; } = "";
+        public int Count { get; init; }
+        public decimal Total { get; init; }
+        public string Category { get; set; } = "";
+        public string Item { get; set; } = "";
+        public string? Error { get; set; }
+    }
+
+    private List<PendingRow> _rows = new();
+    private IReadOnlyList<Classification> _known = Array.Empty<Classification>();
+    private List<string> _categories = new();
+
+    protected override void OnInitialized() => Reload();
+
+    private void Reload()
+    {
+        _known = Store.GetKnownClassifications();
+        _categories = _known.Select(k => k.Category).Distinct().OrderBy(c => c).ToList();
+        _rows = Store.GetPending()
+            .GroupBy(t => t.NormalizedDescription)
+            .Select(g => new PendingRow
+            {
+                Normalized = g.Key,
+                Description = g.First().RawDescription,
+                Count = g.Count(),
+                Total = g.Sum(t => t.Amount),
+            })
+            .OrderByDescending(r => Math.Abs(r.Total))
+            .ToList();
+    }
+
+    private IEnumerable<string> ItemsFor(string category) =>
+        _known.Where(k => k.Category == category && k.Item.Length > 0).Select(k => k.Item).Distinct().OrderBy(i => i);
+
+    private void Save(PendingRow row)
+    {
+        if (string.IsNullOrWhiteSpace(row.Category))
+        {
+            row.Error = "Informe a categoria.";
+            return;
+        }
+
+        Store.Classify(row.Description, new Classification(row.Category.Trim(), row.Item.Trim()));
+        Reload();
+    }
+
+    private void MarkCashOut(PendingRow row)
+    {
+        Store.MarkCashOut(row.Description);
+        Reload();
+    }
+}

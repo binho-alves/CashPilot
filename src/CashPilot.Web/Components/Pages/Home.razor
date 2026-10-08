@@ -1,0 +1,133 @@
+@page "/"
+@inject CashPilotStore Store
+
+<PageTitle>Resumo — CashPilot</PageTitle>
+
+<h1>Resumo do mês</h1>
+
+@if (_months.Count == 0)
+{
+    <p class="muted">Nenhum lançamento ainda. Importe a planilha pela linha de comando (<code>import-gastos</code>).</p>
+}
+else
+{
+    <div class="toolbar">
+        <label>
+            Mês
+            <select value="@_selectedKey" @onchange="OnMonthChanged">
+                @foreach (var month in _months)
+                {
+                    <option value="@Key(month)">@Label(month)</option>
+                }
+            </select>
+        </label>
+    </div>
+
+    @if (Selected is { } selected)
+    {
+        <div class="cards">
+            <div class="card">
+                <span class="muted">Gasto no mês</span>
+                <strong>@Money(selected.Total)</strong>
+            </div>
+            <div class="card">
+                <span class="muted">Lançamentos</span>
+                <strong>@selected.Count</strong>
+            </div>
+            <div class="card @(selected.Uncategorized > 0 ? "warn" : "")">
+                <span class="muted">Sem categoria</span>
+                <strong>@Money(selected.Uncategorized)</strong>
+                @if (selected.Uncategorized > 0)
+                {
+                    <a href="pendentes">classificar</a>
+                }
+            </div>
+        </div>
+
+        <table class="grid">
+            <thead>
+                <tr><th>Categoria</th><th class="num">Total</th><th class="num">%</th><th></th></tr>
+            </thead>
+            <tbody>
+                @foreach (var group in Groups(selected))
+                {
+                    <tr class="clickable" @onclick="() => Toggle(group.Name)" @key="group.Name">
+                        <td>@(_open.Contains(group.Name) ? "▾" : "▸") @group.Name</td>
+                        <td class="num">@Money(group.Total)</td>
+                        <td class="num">@Percent(group.Total, selected.Total)</td>
+                        <td class="barcell"><div class="bar" style="width:@BarWidth(group.Total, selected.Total)%"></div></td>
+                    </tr>
+                    @if (_open.Contains(group.Name))
+                    {
+                        @foreach (var line in group.Lines.Where(l => l.Item.Length > 0))
+                        {
+                            <tr class="sub" @key="@(group.Name + "/" + line.Item)">
+                                <td>@line.Item <span class="muted">(@line.Count)</span></td>
+                                <td class="num">@Money(line.Total)</td>
+                                <td></td>
+                                <td></td>
+                            </tr>
+                        }
+                    }
+                }
+            </tbody>
+        </table>
+    }
+}
+
+@code {
+    private static readonly CultureInfo Br = new("pt-BR");
+
+    private static readonly string[] MonthNames =
+    {
+        "janeiro", "fevereiro", "março", "abril", "maio", "junho",
+        "julho", "agosto", "setembro", "outubro", "novembro", "dezembro",
+    };
+
+    private IReadOnlyList<MonthlySpending> _months = Array.Empty<MonthlySpending>();
+    private string _selectedKey = "";
+    private readonly HashSet<string> _open = new();
+
+    private MonthlySpending? Selected => _months.FirstOrDefault(m => Key(m) == _selectedKey);
+
+    protected override void OnInitialized()
+    {
+        _months = SpendingReport.ByMonth(Store.GetAll());
+
+        var today = DateTime.Today;
+        var current = _months.LastOrDefault(m => m.Year * 12 + m.Month <= today.Year * 12 + today.Month)
+                      ?? _months.LastOrDefault();
+        _selectedKey = current is null ? "" : Key(current);
+    }
+
+    private void OnMonthChanged(ChangeEventArgs e)
+    {
+        _selectedKey = e.Value?.ToString() ?? "";
+        _open.Clear();
+    }
+
+    private void Toggle(string category)
+    {
+        if (!_open.Remove(category)) _open.Add(category);
+    }
+
+    private static string Key(MonthlySpending m) => $"{m.Year}-{m.Month:00}";
+
+    private static string Label(MonthlySpending m) => $"{MonthNames[m.Month - 1]} de {m.Year}";
+
+    private static string Money(decimal value) => value.ToString("C2", Br);
+
+    private static string Percent(decimal part, decimal total) =>
+        total <= 0 ? "" : (part / total).ToString("P1", Br);
+
+    private static string BarWidth(decimal part, decimal total) =>
+        total <= 0 ? "0" : Math.Clamp(part / total * 100m, 0m, 100m).ToString("F1", CultureInfo.InvariantCulture);
+
+    private sealed record CategoryGroup(string Name, decimal Total, List<SpendingLine> Lines);
+
+    private static IEnumerable<CategoryGroup> Groups(MonthlySpending month) =>
+        month.Lines
+            .GroupBy(l => l.Category)
+            .Select(g => new CategoryGroup(g.Key, g.Sum(l => l.Total), g.OrderByDescending(l => l.Total).ToList()))
+            .OrderByDescending(g => g.Total);
+}

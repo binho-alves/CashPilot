@@ -17,7 +17,9 @@ Personal cash-flow control for people juggling several bank accounts, credit car
 | Project | Contents |
 |---|---|
 | `src/CashPilot.Domain` | Pure rules, no dependencies: description normalizer, learning classifier, transfer detector, card cash-out calculator |
-| `tests/CashPilot.Domain.Tests` | xUnit tests |
+| `src/CashPilot.Infrastructure` | SQLite store (`Microsoft.Data.Sqlite`) and the importer for the spreadsheet's "Gastos" tab (CSV) |
+| `src/CashPilot.Cli` | Command line: `import-gastos`, `pending`, `classify`, `stats` |
+| `tests/CashPilot.Domain.Tests`, `tests/CashPilot.Infrastructure.Tests` | xUnit tests |
 
 ## Run
 
@@ -25,10 +27,21 @@ Personal cash-flow control for people juggling several bank accounts, credit car
 dotnet test
 ```
 
+Import your spreadsheet (export the "Gastos" tab as CSV into `data/`, which is git-ignored):
+
+```
+dotnet run --project src/CashPilot.Cli -- import-gastos data/gastos.csv
+dotnet run --project src/CashPilot.Cli -- apply-rules data/rules.csv   # pattern,category,item
+dotnet run --project src/CashPilot.Cli -- pending
+dotnet run --project src/CashPilot.Cli -- classify "Some Store" "Compras" "Geral"
+```
+
+The database is created at `data/cashpilot.db` (override with `--db`). Importing the same file again inserts nothing.
+
 ## Card cash-out example
 
 The card is charged the gross amount, the account receives the net, and the difference is the expense.
-R$ 1,000 at 3.08% (1x): cost R$ 30.80, net R$ 969.20. The fee table by number of installments (`CashAdvanceFeeTable`) ships with 1x only.
+R$ 1,000 at 3.09% (1x): cost R$ 30.90, net R$ 969.10. The fee table by number of installments (`CashAdvanceFeeTable`) ships with the terminal's credit fees for 1x to 12x (3.09% to 12.38%).
 
 ## Roadmap
 
