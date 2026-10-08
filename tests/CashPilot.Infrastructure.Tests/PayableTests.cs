@@ -50,6 +50,25 @@ public class PayableTests
     }
 
     [Fact]
+    public void CardBillSettlementsAreSavedReplacedClearedAndFollowACardRename()
+    {
+        using var store = new CashPilotStore(":memory:");
+        store.SaveAccount(new Account { Name = "Cartão X", Kind = AccountKind.CreditCard, ClosingDay = 20, DueDay = 28 });
+        var closing = new DateOnly(2026, 9, 20);
+
+        store.SetCardBillSettled("Cartão X", closing, new DateOnly(2026, 9, 22));
+        store.SetCardBillSettled("Cartão X", closing, new DateOnly(2026, 9, 25));   // same bill again: replaces
+        var saved = Assert.Single(store.GetCardBillSettlements());
+        Assert.Equal(new DateOnly(2026, 9, 25), saved.PaidOn);
+
+        store.RenameAccount("Cartão X", "Cartão Y");
+        Assert.Equal("Cartão Y", Assert.Single(store.GetCardBillSettlements()).Card);
+
+        Assert.True(store.ClearCardBillSettled("Cartão Y", closing));
+        Assert.Empty(store.GetCardBillSettlements());
+    }
+
+    [Fact]
     public void InvalidPayablesAreRejected()
     {
         using var store = new CashPilotStore(":memory:");

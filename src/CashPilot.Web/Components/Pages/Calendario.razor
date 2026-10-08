@@ -94,7 +94,7 @@
         _lisLimit = banks.Sum(b => b.OverdraftLimit ?? 0m);
         _withoutBalance = banks.Where(b => b.BalanceAnchor is null).Select(b => b.Name).ToList();
 
-        var schedule = PaymentSchedule.Build(accounts, transactions, Store.GetPayables(), Today);
+        var schedule = PaymentSchedule.Build(accounts, transactions, Store.GetPayables(), Today, Store.GetCardBillSettlements());
         _overdue = schedule.Where(s => s.Overdue).ToList();
         _upcoming = schedule.Where(s => !s.Overdue).ToList();
     }

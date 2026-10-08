@@ -77,6 +77,16 @@ internal static class Schema
         ALTER TABLE payables ADD COLUMN late_fee_percent TEXT NULL;
         ALTER TABLE payables ADD COLUMN late_interest_monthly_percent TEXT NULL;
         """,
+
+        // v6: card bills the user marked as paid by hand (payment missing from the entries or with a different amount).
+        """
+        CREATE TABLE card_bill_settlements (
+            card    TEXT NOT NULL,
+            closing TEXT NOT NULL,
+            paid_on TEXT NOT NULL,
+            PRIMARY KEY (card, closing)
+        );
+        """,
     ];
 
     public static void Apply(SqliteConnection connection)

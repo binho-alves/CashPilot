@@ -1,6 +1,7 @@
 @page "/pagar"
 @using CashPilot.Domain.Accounts
 @using CashPilot.Domain.Payments
+@using CashPilot.Domain.Transactions
 @inject CashPilotStore Store
 @inject ToastService Toasts
 
@@ -99,6 +100,10 @@
                                 <button class="primary" @onclick="() => MarkPaid(id)">Pago</button>
                                 <button @onclick="() => Delete(id)">Excluir</button>
                             }
+                            else if (item.Kind == UpcomingKind.CardBill && item.Account is { } cardName && item.Closing is { } closing)
+                            {
+                                <button class="primary" @onclick="() => SettleBill(cardName, closing)">Pago</button>
+                            }
                         </td>
                     </tr>
                 }
@@ -106,6 +111,69 @@
         </table>
     }
 </section>
+
+@if (_recentBills.Count > 0 || _unmatched.Count > 0)
+{
+    <section class="card-box wide">
+        <h2>Faturas e pagamentos</h2>
+        <p class="muted">
+            O app casa cada pagamento de fatura com a fatura de mesmo valor (ao centavo), feito entre o fechamento e 10 dias depois do vencimento.
+            Fatura paga sai da lista "O que falta pagar". Se uma fatura aparece sem pagamento mas você pagou, o valor pago deve ser diferente
+            do total que o app calculou (lançamento faltando ou pagamento parcial): use "Marcar como paga". Isso só tira a fatura da lista;
+            não lança o pagamento, então se o dinheiro já saiu da conta, importe o extrato ou ajuste o saldo.
+        </p>
+        @if (_recentBills.Count > 0)
+        {
+            <table class="grid">
+                <thead>
+                    <tr><th>Cartão</th><th>Fecha</th><th>Vence</th><th class="num">Valor</th><th>Situação</th><th></th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var bill in _recentBills)
+                    {
+                        <tr>
+                            <td>@bill.Card.Name</td>
+                            <td>@bill.Closing.ToString("dd/MM/yyyy")</td>
+                            <td>@bill.Due.ToString("dd/MM/yyyy")</td>
+                            <td class="num">@Money(bill.Total)</td>
+                            <td class="@(bill.Paid || bill.Due >= Today ? "" : "neg")">@BillStatus(bill)</td>
+                            <td class="actions">
+                                @if (bill.ManualPaidOn is not null)
+                                {
+                                    <button @onclick="() => UnsettleBill(bill.Card.Name, bill.Closing)">Desfazer</button>
+                                }
+                                else if (!bill.Paid)
+                                {
+                                    <button @onclick="() => SettleBill(bill.Card.Name, bill.Closing)">Marcar como paga</button>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+        @if (_unmatched.Count > 0)
+        {
+            <h3>Pagamentos de fatura sem fatura correspondente (últimos 90 dias)</h3>
+            <table class="grid">
+                <thead>
+                    <tr><th>Data</th><th>Conta</th><th>Descrição</th><th class="num">Valor</th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var payment in _unmatched)
+                    {
+                        <tr>
+                            <td>@payment.Date.ToString("dd/MM/yyyy")</td>
+                            <td>@payment.Account</td>
+                            <td>@payment.RawDescription</td>
+                            <td class="num">@Money(-payment.Amount)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </section>
+}
 
 @code {
     private static readonly CultureInfo Br = new("pt-BR");
@@ -115,6 +183,8 @@
     private readonly Dictionary<string, string> _balanceInputs = new();
     private IReadOnlyList<UpcomingPayment> _upcoming = Array.Empty<UpcomingPayment>();
     private decimal _totalBalance, _next30, _all, _overdue;
+    private IReadOnlyList<CardBillCycle> _recentBills = Array.Empty<CardBillCycle>();
+    private IReadOnlyList<Transaction> _unmatched = Array.Empty<Transaction>();
 
     private string _newDescription = "";
     private DateOnly _newDue = DateOnly.FromDateTime(DateTime.Today);
@@ -136,7 +206,12 @@
         _balances = _banks.ToDictionary(b => b.Name, b => AccountBalance.Current(b, transactions, Today));
         _totalBalance = _balances.Values.Sum();
 
-        _upcoming = PaymentSchedule.Build(accounts, transactions, Store.GetPayables(), Today);
+        var settlements = Store.GetCardBillSettlements();
+        var matches = CardBillMatcher.Match(accounts, transactions, settlements);
+        _recentBills = matches.Cycles.Where(c => c.Due >= Today.AddDays(-45)).OrderBy(c => c.Due).ToList();
+        _unmatched = matches.UnmatchedPayments.Where(p => p.Date >= Today.AddDays(-90)).ToList();
+
+        _upcoming = PaymentSchedule.Build(accounts, transactions, Store.GetPayables(), Today, settlements);
         _all = _upcoming.Sum(u => u.Amount);
         _overdue = _upcoming.Where(u => u.Overdue).Sum(u => u.Amount);
         _next30 = _upcoming.Where(u => u.DueDate <= Today.AddDays(30)).Sum(u => u.Amount);
@@ -153,6 +228,12 @@
     }.Where(x => x is not null));
 
     private string BalanceInput(string name) => _balanceInputs.TryGetValue(name, out var v) ? v : "";
+
+    private static string BillStatus(CardBillCycle bill) =>
+        bill.Payment is { } p ? $"paga em {p.Date:dd/MM/yyyy}"
+        : bill.ManualPaidOn is { } m ? $"paga em {m:dd/MM/yyyy} (marcada por você)"
+        : bill.Due >= Today ? "em aberto"
+        : "sem pagamento encontrado";
 
     private static string KindLabel(UpcomingPayment item) => item.Kind switch
     {
@@ -214,6 +295,20 @@
         if (!decimal.TryParse(text.Replace("%", "").Trim(), NumberStyles.Number, Br, out var value) || value < 0 || value > 100) return false;
         rate = value;
         return true;
+    }
+
+    private void SettleBill(string card, DateOnly closing)
+    {
+        Store.SetCardBillSettled(card, closing, Today);
+        Toasts.Success($"Fatura do {card} (fecha {closing:dd/MM}) marcada como paga.");
+        Reload();
+    }
+
+    private void UnsettleBill(string card, DateOnly closing)
+    {
+        Store.ClearCardBillSettled(card, closing);
+        Toasts.Success("Marcação desfeita.");
+        Reload();
     }
 
     private void MarkPaid(Guid id)

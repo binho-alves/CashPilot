@@ -482,6 +482,42 @@ public sealed class CashPilotStore : IDisposable
         return command.ExecuteNonQuery() > 0;
     }
 
+    public IReadOnlyList<CardBillSettlement> GetCardBillSettlements()
+    {
+        var result = new List<CardBillSettlement>();
+        using var command = CreateCommand("SELECT card, closing, paid_on FROM card_bill_settlements;");
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            result.Add(new CardBillSettlement(
+                reader.GetString(0),
+                DateOnly.ParseExact(reader.GetString(1), "yyyy-MM-dd", CultureInfo.InvariantCulture),
+                DateOnly.ParseExact(reader.GetString(2), "yyyy-MM-dd", CultureInfo.InvariantCulture)));
+        }
+        return result;
+    }
+
+    /// <summary>Marks the bill of <paramref name="card"/> that closes on <paramref name="closing"/> as paid by hand.</summary>
+    public void SetCardBillSettled(string card, DateOnly closing, DateOnly paidOn)
+    {
+        using var command = CreateCommand("""
+            INSERT INTO card_bill_settlements (card, closing, paid_on) VALUES ($card, $closing, $paid)
+            ON CONFLICT (card, closing) DO UPDATE SET paid_on = excluded.paid_on;
+            """);
+        command.Parameters.AddWithValue("$card", card);
+        command.Parameters.AddWithValue("$closing", closing.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+        command.Parameters.AddWithValue("$paid", paidOn.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+        command.ExecuteNonQuery();
+    }
+
+    public bool ClearCardBillSettled(string card, DateOnly closing)
+    {
+        using var command = CreateCommand("DELETE FROM card_bill_settlements WHERE card = $card AND closing = $closing;");
+        command.Parameters.AddWithValue("$card", card);
+        command.Parameters.AddWithValue("$closing", closing.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+        return command.ExecuteNonQuery() > 0;
+    }
+
     public bool DeletePayable(Guid id)
     {
         using var command = CreateCommand("DELETE FROM payables WHERE id = $id;");
@@ -523,6 +559,11 @@ public sealed class CashPilotStore : IDisposable
             move.Parameters.AddWithValue("$to", to);
             move.Parameters.AddWithValue("$from", from);
             move.ExecuteNonQuery();
+
+            using var settlements = CreateCommand("UPDATE card_bill_settlements SET card = $to WHERE card = $from;");
+            settlements.Parameters.AddWithValue("$to", to);
+            settlements.Parameters.AddWithValue("$from", from);
+            settlements.ExecuteNonQuery();
         });
         return found;
     }

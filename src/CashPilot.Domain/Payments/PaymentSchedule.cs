@@ -18,7 +18,8 @@ public sealed record UpcomingPayment(
     decimal Amount,
     string? Account,
     Guid? PayableId,
-    bool Overdue);
+    bool Overdue,
+    DateOnly? Closing = null);
 
 public static class PaymentSchedule
 {
@@ -26,40 +27,33 @@ public static class PaymentSchedule
     /// Everything still to pay, by due date:
     /// <list type="bullet">
     /// <item>card bills: entries on registered cards with closing and due days, grouped by cycle, bills due today or later
-    /// (the gross cash-out charge counts, bill payments do not);</item>
+    /// (the gross cash-out charge counts, bill payments do not) that no payment was found for
+    /// (see <see cref="CardBillMatcher"/>: a bill already paid early, or marked as paid by hand, is not listed);</item>
     /// <item>unpaid hand-registered payables, overdue ones included;</item>
     /// <item>entries dated in the future on any other account (installments, scheduled boletos).</item>
     /// </list>
-    /// Card bills are not matched against bill payments: one due today or later is listed even if already paid early.
     /// </summary>
     public static IReadOnlyList<UpcomingPayment> Build(
         IEnumerable<Account> accounts,
         IEnumerable<Transaction> transactions,
         IEnumerable<Payable> payables,
-        DateOnly today)
+        DateOnly today,
+        IEnumerable<CardBillSettlement>? settlements = null)
     {
         var result = new List<UpcomingPayment>();
         var all = transactions.ToList();
 
-        var billedCards = accounts
+        var accountList = accounts.ToList();
+        var billedNames = accountList
             .Where(a => a.Kind == AccountKind.CreditCard && a.ClosingDay is not null && a.DueDay is not null)
-            .ToList();
-        var billedNames = billedCards.Select(a => a.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            .Select(a => a.Name)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var card in billedCards)
+        foreach (var bill in CardBillMatcher.Match(accountList, all, settlements).Cycles)
         {
-            var cycles = all
-                .Where(t => string.Equals(t.Account, card.Name, StringComparison.OrdinalIgnoreCase)
-                            && t.Type != TransactionType.CardBillPayment)
-                .GroupBy(t => CardBilling.ClosingFor(t.Date, card.ClosingDay!.Value));
-            foreach (var cycle in cycles)
-            {
-                var due = CardBilling.DueFor(cycle.Key, card.DueDay!.Value);
-                var total = -cycle.Sum(t => t.Amount);
-                if (due < today || total <= 0) continue;
-                result.Add(new UpcomingPayment(UpcomingKind.CardBill,
-                    $"Fatura {card.Name} (fecha {cycle.Key:dd/MM})", due, total, card.Name, null, false));
-            }
+            if (bill.Due < today || bill.Paid) continue;
+            result.Add(new UpcomingPayment(UpcomingKind.CardBill,
+                $"Fatura {bill.Card.Name} (fecha {bill.Closing:dd/MM})", bill.Due, bill.Total, bill.Card.Name, null, false, bill.Closing));
         }
 
         foreach (var payable in payables.Where(p => !p.Paid))
