@@ -8,7 +8,7 @@ public class DescriptionNormalizerTests
     [InlineData("PIX QRS GDS INFORMA31/08", "PIX QRS GDS INFORMA")]
     [InlineData("PIX QRS GDS INFORMA12/08", "PIX QRS GDS INFORMA")]
     [InlineData("DA DAS MEI SDAU15811467", "DA DAS MEI")]
-    [InlineData("RiHappy - Carrinhos Mário Maggie", "RIHAPPY CARRINHOS MARIO MAGGIE")]
+    [InlineData("Loja Brinquedos - Carrinhos Mário", "LOJA BRINQUEDOS CARRINHOS MARIO")]
     [InlineData("99FOOD *PEDIDO", "99FOOD PEDIDO")]
     [InlineData("MERCADO LIVRE PARC02/03", "MERCADO LIVRE")]
     [InlineData("AMAZON MARKETPLACE 03/06", "AMAZON MARKETPLACE")]
