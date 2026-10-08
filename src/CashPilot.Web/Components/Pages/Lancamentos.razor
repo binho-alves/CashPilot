@@ -1,5 +1,6 @@
 @page "/lancamentos"
 @inject CashPilotStore Store
+@inject ToastService Toasts
 
 <PageTitle>Lançamentos — CashPilot</PageTitle>
 
@@ -68,7 +69,7 @@
         @foreach (var t in Filtered.Take(Limit))
         {
             var edit = EditFor(t);
-            <tr @key="t.Id">
+            <tr @key="t.Id" class="@(_savedId == t.Id ? "saved" : "")">
                 <td>@t.Date.ToString("dd/MM/yyyy")</td>
                 <td>@t.Account</td>
                 <td>@t.RawDescription@(t.InstallmentCount is > 1 ? $" ({t.InstallmentNumber}/{t.InstallmentCount})" : "")</td>
@@ -83,12 +84,38 @@
                             <input type="checkbox" @bind="edit.Learn" /> aprender
                         </label>
                         <button class="primary" @onclick="() => Save(t, edit)">Salvar</button>
+                        @if (_confirmDelete == t.Id)
+                        {
+                            <span class="confirm">
+                                Excluir?
+                                <button class="danger" @onclick="() => Delete(t)">Sim</button>
+                                <button @onclick="() => _confirmDelete = null">Não</button>
+                            </span>
+                        }
+                        else
+                        {
+                            <button @onclick="() => _confirmDelete = t.Id">Excluir</button>
+                        }
                         @if (edit.Error is not null) { <span class="error">@edit.Error</span> }
                     </td>
                 }
                 else
                 {
-                    <td colspan="3" class="muted">não conta como gasto</td>
+                    <td colspan="2" class="muted">não conta como gasto</td>
+                    <td class="actions">
+                        @if (_confirmDelete == t.Id)
+                        {
+                            <span class="confirm">
+                                Excluir?
+                                <button class="danger" @onclick="() => Delete(t)">Sim</button>
+                                <button @onclick="() => _confirmDelete = null">Não</button>
+                            </span>
+                        }
+                        else
+                        {
+                            <button @onclick="() => _confirmDelete = t.Id">Excluir</button>
+                        }
+                    </td>
                 }
             </tr>
         }
@@ -113,6 +140,8 @@
     private List<string> _accounts = new();
     private List<string> _categories = new();
     private readonly Dictionary<Guid, EditState> _edits = new();
+    private Guid? _confirmDelete;
+    private Guid? _savedId;
 
     private string _month = "";
     private string _account = "";
@@ -129,6 +158,7 @@
         _categories = _all.Select(t => t.Category).Where(c => !string.IsNullOrEmpty(c)).Select(c => c!)
             .Distinct().OrderBy(c => c).ToList();
         _edits.Clear();
+        _confirmDelete = null;
     }
 
     private List<Transaction> Filtered => _all.Where(t =>
@@ -157,6 +187,16 @@
         }
 
         Store.ClassifyEntry(t.Id, new Classification(edit.Category.Trim(), edit.Item.Trim()), edit.Learn);
+        Reload();
+        _savedId = t.Id;
+        Toasts.Success("Salvo: " + edit.Category.Trim() + (edit.Item.Trim().Length > 0 ? " / " + edit.Item.Trim() : "") +
+                       (edit.Learn ? " (e aprendido para as próximas)" : ""));
+    }
+
+    private void Delete(Transaction t)
+    {
+        if (Store.DeleteTransaction(t.Id)) Toasts.Success("Lançamento excluído: " + t.RawDescription);
+        _savedId = null;
         Reload();
     }
 

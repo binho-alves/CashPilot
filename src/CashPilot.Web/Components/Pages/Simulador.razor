@@ -1,0 +1,100 @@
+@page "/simulador"
+@using CashPilot.Domain.Accounts
+@using CashPilot.Domain.Interest
+@inject CashPilotStore Store
+
+<PageTitle>Simulador — CashPilot</PageTitle>
+
+<h1>Simulador de custo</h1>
+
+<section class="card-box wide">
+    <p class="muted">Quanto você precisa e por quantos dias? O app compara o LIS das suas contas e o saque na maquininha de 1x a 12x.</p>
+    <div class="filters">
+        <label>Preciso de (R$) <input @bind="_amountText" data-money="brl" inputmode="numeric" placeholder="R$ 1.000,00" /></label>
+        <label>Por quantos dias <input type="number" min="1" max="365" @bind="_days" /></label>
+        <label>&nbsp;<button class="primary" @onclick="Simulate">Simular</button></label>
+    </div>
+    @if (_error is not null) { <p class="error">@_error</p> }
+</section>
+
+@if (_options is not null)
+{
+    @if (_withoutBalance.Count > 0)
+    {
+        <p class="error">
+            Sem saldo informado em @string.Join(", ", _withoutBalance): o simulador assumiu saldo zero (LIS inteiro livre).
+            Informe o saldo real em <a href="pagar">Contas a pagar</a> para o limite disponível ficar certo.
+        </p>
+    }
+
+    <section class="card-box wide">
+        <h2>Do mais barato ao mais caro</h2>
+        <table class="grid">
+            <thead>
+                <tr><th>Opção</th><th>Como funciona</th><th class="num">Custo</th><th class="num">% do valor</th></tr>
+            </thead>
+            <tbody>
+                @for (var i = 0; i < _options.Count; i++)
+                {
+                    var option = _options[i];
+                    <tr class="@(option.Feasible ? "" : "muted")">
+                        <td><strong>@(i == 0 && option.Feasible ? "★ " : "")@option.Name</strong></td>
+                        <td>@option.Detail@(option.Note is null ? "" : " · não cobre: " + option.Note)</td>
+                        <td class="num">@Money(option.Cost)</td>
+                        <td class="num">@((option.Cost / _amount * 100m).ToString("N2", Br))%</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+        <p class="muted">
+            O custo do LIS é juros simples proporcional aos dias além dos dias sem juros; não inclui IOF, então o real é um pouco maior.
+            O saque na maquininha custa a taxa uma vez, independente dos dias, e o valor bruto vai para a fatura do cartão.
+            Boleto atrasado e rotativo do cartão ainda não entram: faltam as taxas cadastradas.
+        </p>
+    </section>
+}
+
+@code {
+    private static readonly CultureInfo Br = new("pt-BR");
+
+    private string _amountText = "";
+    private int _days = 30;
+    private decimal _amount;
+    private string? _error;
+    private IReadOnlyList<FundingOption>? _options;
+    private List<string> _withoutBalance = new();
+
+    private static string Money(decimal value) => "R$ " + value.ToString("N2", Br);
+
+    private void Simulate()
+    {
+        _error = null;
+        _options = null;
+        if (!decimal.TryParse(_amountText.Replace("R$", "").Trim(), NumberStyles.Number, Br, out var amount) || amount <= 0)
+        {
+            _error = "Informe um valor maior que zero, no formato 1.000,00.";
+            return;
+        }
+        if (_days < 1 || _days > 365)
+        {
+            _error = "Os dias devem ficar entre 1 e 365.";
+            return;
+        }
+
+        var today = DateOnly.FromDateTime(DateTime.Today);
+        var accounts = Store.GetAccounts();
+        var transactions = Store.GetAll();
+        var banks = accounts.Where(a => a.Kind == AccountKind.BankAccount).ToList();
+        // Without a hand-set balance the history sum is meaningless, so assume zero and say so.
+        var balances = banks.ToDictionary(
+            a => a.Name,
+            a => a.BalanceAnchor is null ? 0m : AccountBalance.Current(a, transactions, today));
+        _withoutBalance = banks
+            .Where(a => a.BalanceAnchor is null && a.OverdraftMonthlyRatePercent is not null)
+            .Select(a => a.Name)
+            .ToList();
+
+        _amount = amount;
+        _options = CostSimulator.Compare(amount, _days, accounts, balances);
+    }
+}

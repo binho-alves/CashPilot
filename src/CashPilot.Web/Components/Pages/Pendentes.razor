@@ -1,5 +1,6 @@
 @page "/pendentes"
 @inject CashPilotStore Store
+@inject ToastService Toasts
 
 <PageTitle>Pendentes — CashPilot</PageTitle>
 
@@ -19,14 +20,16 @@
 else
 {
     <p class="muted">
-        @_rows.Count descrições, @_rows.Sum(r => r.Count) lançamentos.
+        @_rows.Count descrições, @_rows.Sum(r => r.Entries.Count) lançamentos.
         Classificar uma descrição ensina o sistema: as próximas importações já entram classificadas.
+        Use "Ver" para conferir datas e contas, ou excluir um lançamento duplicado.
     </p>
 
     <table class="grid">
         <thead>
             <tr>
                 <th>Descrição</th>
+                <th>Quando</th>
                 <th class="num">Qtde</th>
                 <th class="num">Total</th>
                 <th>Categoria</th>
@@ -34,14 +37,15 @@ else
                 <th></th>
             </tr>
         </thead>
-        <tbody>
-            @for (var i = 0; i < _rows.Count; i++)
-            {
-                var row = _rows[i];
-                var listId = "dl-items-" + i;
-                <tr @key="row.Normalized">
+        @for (var i = 0; i < _rows.Count; i++)
+        {
+            var row = _rows[i];
+            var listId = "dl-items-" + i;
+            <tbody class="group" @key="row.Normalized">
+                <tr>
                     <td>@row.Description</td>
-                    <td class="num">@row.Count</td>
+                    <td class="muted">@row.When</td>
+                    <td class="num">@row.Entries.Count</td>
                     <td class="num">@row.Total.ToString("N2", Br)</td>
                     <td>
                         <input list="dl-categories" value="@row.Category" placeholder="Categoria"
@@ -60,14 +64,47 @@ else
                     <td class="actions">
                         <button class="primary" @onclick="() => Save(row)">Salvar</button>
                         <button title="Cobrança bruta de saque na maquininha: não é gasto" @onclick="() => MarkCashOut(row)">Saque</button>
+                        <button @onclick="() => row.Open = !row.Open">@(row.Open ? "Ocultar" : "Ver")</button>
                         @if (row.Error is not null)
                         {
                             <span class="error">@row.Error</span>
                         }
                     </td>
                 </tr>
-            }
-        </tbody>
+                @if (row.Open)
+                {
+                    <tr class="detail">
+                        <td colspan="7">
+                            <table class="detail-table">
+                                @foreach (var entry in row.Entries)
+                                {
+                                    <tr @key="entry.Id">
+                                        <td>@entry.Date.ToString("dd/MM/yyyy")</td>
+                                        <td>@entry.Account</td>
+                                        <td>@entry.RawDescription</td>
+                                        <td class="num">@entry.Amount.ToString("N2", Br)</td>
+                                        <td class="actions">
+                                            @if (_confirmDelete == entry.Id)
+                                            {
+                                                <span class="confirm">
+                                                    Excluir?
+                                                    <button class="danger" @onclick="() => Delete(entry)">Sim</button>
+                                                    <button @onclick="() => _confirmDelete = null">Não</button>
+                                                </span>
+                                            }
+                                            else
+                                            {
+                                                <button @onclick="() => _confirmDelete = entry.Id">Excluir</button>
+                                            }
+                                        </td>
+                                    </tr>
+                                }
+                            </table>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        }
     </table>
 }
 
@@ -78,21 +115,25 @@ else
     {
         public string Normalized { get; init; } = "";
         public string Description { get; init; } = "";
-        public int Count { get; init; }
+        public List<Transaction> Entries { get; init; } = new();
         public decimal Total { get; init; }
+        public string When { get; init; } = "";
         public string Category { get; set; } = "";
         public string Item { get; set; } = "";
         public string? Error { get; set; }
+        public bool Open { get; set; }
     }
 
     private List<PendingRow> _rows = new();
     private IReadOnlyList<Classification> _known = Array.Empty<Classification>();
     private List<string> _categories = new();
+    private Guid? _confirmDelete;
 
     protected override void OnInitialized() => Reload();
 
     private void Reload()
     {
+        var open = _rows.Where(r => r.Open).Select(r => r.Normalized).ToHashSet();
         _known = Store.GetKnownClassifications();
         _categories = _known.Select(k => k.Category).Distinct().OrderBy(c => c).ToList();
         _rows = Store.GetPending()
@@ -101,11 +142,23 @@ else
             {
                 Normalized = g.Key,
                 Description = g.First().RawDescription,
-                Count = g.Count(),
+                Entries = g.OrderByDescending(t => t.Date).ToList(),
                 Total = g.Sum(t => t.Amount),
+                When = Describe(g.ToList()),
+                Open = open.Contains(g.Key),
             })
             .OrderByDescending(r => Math.Abs(r.Total))
             .ToList();
+        _confirmDelete = null;
+    }
+
+    private static string Describe(List<Transaction> entries)
+    {
+        var first = entries.Min(t => t.Date);
+        var last = entries.Max(t => t.Date);
+        var dates = first == last ? first.ToString("dd/MM/yy") : $"{first:dd/MM/yy} a {last:dd/MM/yy}";
+        var accounts = entries.Select(t => t.Account).Distinct().ToList();
+        return accounts.Count == 1 ? $"{dates} · {accounts[0]}" : $"{dates} · {accounts.Count} contas";
     }
 
     private IEnumerable<string> ItemsFor(string category) =>
@@ -119,13 +172,23 @@ else
             return;
         }
 
-        Store.Classify(row.Description, new Classification(row.Category.Trim(), row.Item.Trim()));
+        var classification = new Classification(row.Category.Trim(), row.Item.Trim());
+        var updated = Store.Classify(row.Description, classification);
+        Toasts.Success($"Salvo: {updated} lançamento(s) → {classification.Category}" +
+                       (classification.Item.Length > 0 ? " / " + classification.Item : ""));
         Reload();
     }
 
     private void MarkCashOut(PendingRow row)
     {
-        Store.MarkCashOut(row.Description);
+        var updated = Store.MarkCashOut(row.Description);
+        Toasts.Success($"Marcado como saque na maquininha ({updated} lançamento(s)); não conta como gasto.");
+        Reload();
+    }
+
+    private void Delete(Transaction entry)
+    {
+        if (Store.DeleteTransaction(entry.Id)) Toasts.Success("Lançamento excluído.");
         Reload();
     }
 }

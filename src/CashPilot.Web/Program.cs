@@ -11,6 +11,7 @@ builder.Services.AddRazorComponents().AddInteractiveServerComponents();
 
 var databasePath = ResolveDatabasePath(builder.Configuration);
 builder.Services.AddScoped(_ => new CashPilotStore(databasePath));
+builder.Services.AddScoped<CashPilot.Web.ToastService>();
 
 var app = builder.Build();
 

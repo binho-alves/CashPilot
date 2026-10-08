@@ -50,6 +50,27 @@ internal static class Schema
             overdraft_monthly_rate  TEXT    NULL
         );
         """,
+
+        // v3: manual balance anchor per account, and hand-registered payables (boletos, bills).
+        """
+        ALTER TABLE accounts ADD COLUMN balance_anchor_cents INTEGER NULL;
+        ALTER TABLE accounts ADD COLUMN balance_anchor_date  TEXT    NULL;
+
+        CREATE TABLE payables (
+            id           TEXT    NOT NULL PRIMARY KEY,
+            description  TEXT    NOT NULL,
+            due_date     TEXT    NOT NULL,
+            amount_cents INTEGER NOT NULL,
+            paid         INTEGER NOT NULL DEFAULT 0,
+            paid_date    TEXT    NULL
+        );
+        CREATE INDEX ix_payables_due ON payables (due_date);
+        """,
+
+        // v4: soft delete. A deleted entry keeps its dedup key, so importing the same file again does not bring it back.
+        """
+        ALTER TABLE transactions ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0;
+        """,
     ];
 
     public static void Apply(SqliteConnection connection)

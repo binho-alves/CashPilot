@@ -1,6 +1,7 @@
 @page "/contas"
 @using CashPilot.Domain.Accounts
 @inject CashPilotStore Store
+@inject ToastService Toasts
 
 <PageTitle>Contas — CashPilot</PageTitle>
 
@@ -10,12 +11,12 @@
     <h2>@(_editing ? "Editar conta" : "Nova conta")</h2>
     <p class="muted">
         Cadastre contas bancárias e cartões. Use o mesmo nome que aparece nos lançamentos (coluna Conta).
-        Cartão: limite e dias de fechamento e vencimento. Conta bancária: limite do LIS, dias sem juros e juros ao mês.
+        Para cartão, escolha o tipo "Cartão de crédito". Cartão: limite e dias de fechamento e vencimento. Conta bancária: limite do LIS, dias sem juros e juros ao mês.
     </p>
 
     <div class="filters">
         <label>Nome
-            <input list="dl-names" @bind="_form.Name" disabled="@_editing" />
+            <input list="dl-names" @bind="_form.Name" />
             <datalist id="dl-names">
                 @foreach (var name in _unregistered)
                 {
@@ -34,15 +35,15 @@
 
         @if (_form.Kind == AccountKind.CreditCard)
         {
-            <label>Limite (R$) <input @bind="_form.CreditLimit" placeholder="0,00" /></label>
+            <label>Limite (R$) <input @bind="_form.CreditLimit" data-money="brl" inputmode="numeric" placeholder="R$ 0,00" /></label>
             <label>Dia de fechamento <input type="number" min="1" max="31" @bind="_form.ClosingDay" /></label>
             <label>Dia de vencimento <input type="number" min="1" max="31" @bind="_form.DueDay" /></label>
         }
         else if (_form.Kind == AccountKind.BankAccount)
         {
-            <label>Limite do LIS (R$) <input @bind="_form.OverdraftLimit" placeholder="0,00" /></label>
+            <label>Limite do LIS (R$) <input @bind="_form.OverdraftLimit" data-money="brl" inputmode="numeric" placeholder="R$ 0,00" /></label>
             <label>Dias sem juros no LIS <input type="number" min="0" max="365" @bind="_form.OverdraftFreeDays" /></label>
-            <label>Juros do LIS (% ao mês) <input @bind="_form.OverdraftRate" placeholder="0,00" /></label>
+            <label>Juros do LIS (% ao mês) <input @bind="_form.OverdraftRate" data-money="percent" inputmode="numeric" placeholder="0,00" /></label>
         }
 
         <label>&nbsp;
@@ -86,7 +87,13 @@
 
     @if (_unregistered.Count > 0)
     {
-        <p class="muted">Nos lançamentos, ainda sem cadastro: @string.Join(", ", _unregistered)</p>
+        <p class="muted">Nos lançamentos, ainda sem cadastro (clique para cadastrar):</p>
+        <div class="chips">
+            @foreach (var name in _unregistered)
+            {
+                <button @onclick="() => Prefill(name)">@name</button>
+            }
+        </div>
     }
 </section>
 
@@ -107,6 +114,7 @@
 
     private Form _form = new();
     private bool _editing;
+    private string _originalName = "";
     private string? _error;
     private IReadOnlyList<Account> _accounts = Array.Empty<Account>();
     private List<string> _unregistered = new();
@@ -143,9 +151,23 @@
 
         var card = _form.Kind == AccountKind.CreditCard;
         var bank = _form.Kind == AccountKind.BankAccount;
+        var name = _form.Name.Trim();
+        if (_editing && name != _originalName)
+        {
+            try
+            {
+                if (!Store.RenameAccount(_originalName, name)) { _error = "Conta não encontrada."; return; }
+            }
+            catch (InvalidOperationException ex)
+            {
+                _error = ex.Message;
+                return;
+            }
+        }
+
         Store.SaveAccount(new Account
         {
-            Name = _form.Name.Trim(),
+            Name = name,
             Kind = _form.Kind,
             CreditLimit = card ? creditLimit : null,
             ClosingDay = card ? _form.ClosingDay : null,
@@ -155,23 +177,38 @@
             OverdraftMonthlyRatePercent = bank ? rate : null,
         });
 
+        Toasts.Success("Conta salva: " + name);
         Cancel();
     }
 
     private void Edit(Account account)
     {
         _editing = true;
+        _originalName = account.Name;
         _error = null;
         _form = new Form
         {
             Name = account.Name,
             Kind = account.Kind,
-            CreditLimit = account.CreditLimit?.ToString("N2", Br) ?? "",
+            CreditLimit = account.CreditLimit is { } cl ? "R$ " + cl.ToString("N2", Br) : "",
             ClosingDay = account.ClosingDay,
             DueDay = account.DueDay,
-            OverdraftLimit = account.OverdraftLimit?.ToString("N2", Br) ?? "",
+            OverdraftLimit = account.OverdraftLimit is { } ol ? "R$ " + ol.ToString("N2", Br) : "",
             OverdraftFreeDays = account.OverdraftFreeDays,
             OverdraftRate = account.OverdraftMonthlyRatePercent?.ToString("N2", Br) ?? "",
+        };
+    }
+
+    private void Prefill(string name)
+    {
+        _editing = false;
+        _error = null;
+        _form = new Form
+        {
+            Name = name,
+            Kind = name.StartsWith("Cart", StringComparison.OrdinalIgnoreCase)
+                ? AccountKind.CreditCard
+                : AccountKind.BankAccount,
         };
     }
 
@@ -185,6 +222,7 @@
     private void Delete(string name)
     {
         Store.DeleteAccount(name);
+        Toasts.Success("Conta excluída: " + name);
         Reload();
     }
 

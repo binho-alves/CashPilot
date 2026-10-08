@@ -1,0 +1,54 @@
+@implements IDisposable
+@inject ToastService Toasts
+
+<div class="toasts" aria-live="polite">
+    @foreach (var toast in _toasts)
+    {
+        <div class="toast @(toast.IsError ? "toast-error" : "")" @key="toast.Id">@toast.Message</div>
+    }
+</div>
+
+@code {
+    private sealed record Toast(int Id, string Message, bool IsError);
+
+    private readonly List<Toast> _toasts = new();
+    private int _next;
+    private bool _disposed;
+
+    protected override void OnInitialized() => Toasts.Shown += OnShown;
+
+    private void OnShown(string message, bool isError)
+    {
+        var toast = new Toast(++_next, message, isError);
+        _ = InvokeAsync(() =>
+        {
+            _toasts.Add(toast);
+            StateHasChanged();
+        });
+        _ = RemoveLater(toast, isError ? 5000 : 2500);
+    }
+
+    private async Task RemoveLater(Toast toast, int milliseconds)
+    {
+        await Task.Delay(milliseconds);
+        if (_disposed) return;
+        try
+        {
+            await InvokeAsync(() =>
+            {
+                _toasts.Remove(toast);
+                StateHasChanged();
+            });
+        }
+        catch (ObjectDisposedException)
+        {
+            // The browser session ended while the message was still showing.
+        }
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        Toasts.Shown -= OnShown;
+    }
+}

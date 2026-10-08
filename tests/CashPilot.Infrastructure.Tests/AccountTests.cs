@@ -63,4 +63,39 @@ public class AccountTests
         using var store = new CashPilotStore(":memory:");
         Assert.Throws<ArgumentException>(() => store.SaveAccount(new Account { Name = "  " }));
     }
+
+    [Fact]
+    public void RenamingAnAccountMovesItsEntriesAndKeepsItsSettings()
+    {
+        using var store = new CashPilotStore(":memory:");
+        new GastosImporter(store).Import(new StringReader(string.Join("\n",
+            "Dia,Categoria,Ítem,Conta,Valor,Obs",
+            "03/09/2026,Lazer,Cinema,Conta A,\"R$ 40,00\",Loja Alfa")));
+        store.SaveAccount(new Account { Name = "Conta A", OverdraftFreeDays = 7 });
+
+        Assert.True(store.RenameAccount("Conta A", "Conta Principal"));
+
+        Assert.Equal("Conta Principal", Assert.Single(store.GetAccounts()).Name);
+        Assert.Equal(7, store.GetAccounts()[0].OverdraftFreeDays);
+        Assert.Equal("Conta Principal", Assert.Single(store.GetAll()).Account);
+
+        // Importing the same sheet again (old name) does not duplicate the moved entry.
+        var again = new GastosImporter(store).Import(new StringReader(string.Join("\n",
+            "Dia,Categoria,Ítem,Conta,Valor,Obs",
+            "03/09/2026,Lazer,Cinema,Conta A,\"R$ 40,00\",Loja Alfa")));
+        Assert.Equal(0, again.Inserted);
+    }
+
+    [Fact]
+    public void RenamingToAnExistingAccountIsRefusedAndUnknownAccountsReturnFalse()
+    {
+        using var store = new CashPilotStore(":memory:");
+        store.SaveAccount(new Account { Name = "Conta A" });
+        store.SaveAccount(new Account { Name = "Conta B" });
+
+        Assert.Throws<InvalidOperationException>(() => store.RenameAccount("Conta A", "conta b"));
+        Assert.Equal(new[] { "Conta A", "Conta B" }, store.GetAccounts().Select(a => a.Name).OrderBy(n => n));
+        Assert.False(store.RenameAccount("Inexistente", "Qualquer"));
+        Assert.True(store.RenameAccount("Conta A", "CONTA A")); // case-only change is allowed
+    }
 }

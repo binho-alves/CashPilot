@@ -1,6 +1,7 @@
 using System.Globalization;
 using CashPilot.Domain.Accounts;
 using CashPilot.Domain.Descriptions;
+using CashPilot.Domain.Payments;
 using CashPilot.Domain.Transactions;
 using Microsoft.Data.Sqlite;
 
@@ -96,15 +97,15 @@ public sealed class CashPilotStore : IDisposable
 
     public int Count()
     {
-        using var command = CreateCommand("SELECT COUNT(*) FROM transactions;");
+        using var command = CreateCommand("SELECT COUNT(*) FROM transactions WHERE deleted = 0;");
         return Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture);
     }
 
-    public IReadOnlyList<Transaction> GetAll() => Query("SELECT * FROM transactions ORDER BY date, rowid;");
+    public IReadOnlyList<Transaction> GetAll() => Query("SELECT * FROM transactions WHERE deleted = 0 ORDER BY date, rowid;");
 
     /// <summary>Spending/income without a category yet: the queue the user classifies (and the classifier learns from).</summary>
     public IReadOnlyList<Transaction> GetPending() => Query(
-        "SELECT * FROM transactions WHERE category IS NULL AND type IN (0, 1, 2) ORDER BY date, rowid;");
+        "SELECT * FROM transactions WHERE deleted = 0 AND category IS NULL AND type IN (0, 1, 2) ORDER BY date, rowid;");
 
     /// <summary>Records the user's decision for every stored entry with this normalized description, and teaches the rule.</summary>
     public int Classify(string description, Classification classification)
@@ -144,6 +145,17 @@ public sealed class CashPilotStore : IDisposable
 
         SetClassification(id, classification);
         if (learn) Classify(description, classification);
+    }
+
+    /// <summary>
+    /// Removes an entry from every screen and report (duplicates, mistakes). It is a soft delete: the import key stays,
+    /// so importing the same file again does not bring the entry back. Returns false when nothing matched.
+    /// </summary>
+    public bool DeleteTransaction(Guid id)
+    {
+        using var command = CreateCommand("UPDATE transactions SET deleted = 1 WHERE id = $id AND deleted = 0;");
+        command.Parameters.AddWithValue("$id", id.ToString());
+        return command.ExecuteNonQuery() > 0;
     }
 
     /// <summary>Applies the current rules (exact, contains, similarity) to every entry still without a category.</summary>
@@ -200,7 +212,7 @@ public sealed class CashPilotStore : IDisposable
     {
         var result = new List<Classification>();
         using var command = CreateCommand("""
-            SELECT DISTINCT category, COALESCE(item, '') FROM transactions WHERE category IS NOT NULL
+            SELECT DISTINCT category, COALESCE(item, '') FROM transactions WHERE deleted = 0 AND category IS NOT NULL
             UNION
             SELECT DISTINCT category, item FROM classification_rules WHERE kind IN (1, 2) AND category <> ''
             ORDER BY 1, 2;
@@ -261,7 +273,7 @@ public sealed class CashPilotStore : IDisposable
     public IReadOnlyList<string> GetAccountNamesInUse()
     {
         var result = new List<string>();
-        using var command = CreateCommand("SELECT DISTINCT account FROM transactions ORDER BY account;");
+        using var command = CreateCommand("SELECT DISTINCT account FROM transactions WHERE deleted = 0 ORDER BY account;");
         using var reader = command.ExecuteReader();
         while (reader.Read()) result.Add(reader.GetString(0));
         return result;
@@ -272,7 +284,8 @@ public sealed class CashPilotStore : IDisposable
         var result = new List<Account>();
         using var command = CreateCommand("""
             SELECT name, kind, credit_limit_cents, closing_day, due_day,
-                   overdraft_limit_cents, overdraft_free_days, overdraft_monthly_rate
+                   overdraft_limit_cents, overdraft_free_days, overdraft_monthly_rate,
+                   balance_anchor_cents, balance_anchor_date
             FROM accounts ORDER BY kind, name;
             """);
         using var reader = command.ExecuteReader();
@@ -290,6 +303,10 @@ public sealed class CashPilotStore : IDisposable
                 OverdraftMonthlyRatePercent = reader.IsDBNull(7)
                     ? null
                     : decimal.Parse(reader.GetString(7), CultureInfo.InvariantCulture),
+                BalanceAnchor = reader.IsDBNull(8) ? null : FromCents(reader.GetInt64(8)),
+                BalanceAnchorDate = reader.IsDBNull(9)
+                    ? null
+                    : DateOnly.ParseExact(reader.GetString(9), "yyyy-MM-dd", CultureInfo.InvariantCulture),
             });
         }
         return result;
@@ -324,6 +341,112 @@ public sealed class CashPilotStore : IDisposable
             ? (object)r.ToString(CultureInfo.InvariantCulture)
             : DBNull.Value);
         command.ExecuteNonQuery();
+    }
+
+    /// <summary>Sets the hand-typed balance of a registered account as of <paramref name="asOf"/>.</summary>
+    public bool SetAccountBalance(string name, decimal balance, DateOnly asOf)
+    {
+        using var command = CreateCommand(
+            "UPDATE accounts SET balance_anchor_cents = $cents, balance_anchor_date = $date WHERE name = $name;");
+        command.Parameters.AddWithValue("$cents", ToCents(balance));
+        command.Parameters.AddWithValue("$date", asOf.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+        command.Parameters.AddWithValue("$name", name);
+        return command.ExecuteNonQuery() > 0;
+    }
+
+    public IReadOnlyList<Payable> GetPayables()
+    {
+        var result = new List<Payable>();
+        using var command = CreateCommand(
+            "SELECT id, description, due_date, amount_cents, paid, paid_date FROM payables ORDER BY due_date, description;");
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            result.Add(new Payable
+            {
+                Id = Guid.Parse(reader.GetString(0)),
+                Description = reader.GetString(1),
+                DueDate = DateOnly.ParseExact(reader.GetString(2), "yyyy-MM-dd", CultureInfo.InvariantCulture),
+                Amount = FromCents(reader.GetInt64(3)),
+                Paid = reader.GetInt32(4) != 0,
+                PaidDate = reader.IsDBNull(5)
+                    ? null
+                    : DateOnly.ParseExact(reader.GetString(5), "yyyy-MM-dd", CultureInfo.InvariantCulture),
+            });
+        }
+        return result;
+    }
+
+    public void AddPayable(Payable payable)
+    {
+        if (string.IsNullOrWhiteSpace(payable.Description)) throw new ArgumentException("Description is required.", nameof(payable));
+        if (payable.Amount <= 0) throw new ArgumentException("Amount must be positive.", nameof(payable));
+
+        using var command = CreateCommand("""
+            INSERT INTO payables (id, description, due_date, amount_cents, paid, paid_date)
+            VALUES ($id, $description, $due, $cents, 0, NULL);
+            """);
+        command.Parameters.AddWithValue("$id", payable.Id.ToString());
+        command.Parameters.AddWithValue("$description", payable.Description.Trim());
+        command.Parameters.AddWithValue("$due", payable.DueDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+        command.Parameters.AddWithValue("$cents", ToCents(payable.Amount));
+        command.ExecuteNonQuery();
+    }
+
+    public bool SetPayablePaid(Guid id, bool paid, DateOnly? paidOn = null)
+    {
+        using var command = CreateCommand("UPDATE payables SET paid = $paid, paid_date = $date WHERE id = $id;");
+        command.Parameters.AddWithValue("$paid", paid ? 1 : 0);
+        command.Parameters.AddWithValue("$date", paid && paidOn is { } d
+            ? (object)d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+            : DBNull.Value);
+        command.Parameters.AddWithValue("$id", id.ToString());
+        return command.ExecuteNonQuery() > 0;
+    }
+
+    public bool DeletePayable(Guid id)
+    {
+        using var command = CreateCommand("DELETE FROM payables WHERE id = $id;");
+        command.Parameters.AddWithValue("$id", id.ToString());
+        return command.ExecuteNonQuery() > 0;
+    }
+
+    /// <summary>
+    /// Renames a registered account and moves its entries to the new name. Returns false when <paramref name="from"/>
+    /// is not registered; throws when another registered account already uses <paramref name="to"/>.
+    /// Entries keep their import keys, so re-importing the same sheet still does not duplicate them.
+    /// </summary>
+    public bool RenameAccount(string from, string to)
+    {
+        to = to?.Trim() ?? "";
+        if (to.Length == 0) throw new ArgumentException("Account name is required.", nameof(to));
+        if (from == to) return true;
+
+        var found = false;
+        InTransaction(() =>
+        {
+            if (!string.Equals(from, to, StringComparison.OrdinalIgnoreCase))
+            {
+                using var check = CreateCommand("SELECT COUNT(*) FROM accounts WHERE name = $to COLLATE NOCASE;");
+                check.Parameters.AddWithValue("$to", to);
+                if (Convert.ToInt32(check.ExecuteScalar(), CultureInfo.InvariantCulture) > 0)
+                    throw new InvalidOperationException($"Já existe uma conta chamada \"{to}\".");
+            }
+
+            using (var update = CreateCommand("UPDATE accounts SET name = $to WHERE name = $from;"))
+            {
+                update.Parameters.AddWithValue("$to", to);
+                update.Parameters.AddWithValue("$from", from);
+                found = update.ExecuteNonQuery() > 0;
+            }
+            if (!found) return;
+
+            using var move = CreateCommand("UPDATE transactions SET account = $to WHERE account = $from;");
+            move.Parameters.AddWithValue("$to", to);
+            move.Parameters.AddWithValue("$from", from);
+            move.ExecuteNonQuery();
+        });
+        return found;
     }
 
     public bool DeleteAccount(string name)

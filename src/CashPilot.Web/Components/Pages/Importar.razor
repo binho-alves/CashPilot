@@ -1,6 +1,7 @@
 @page "/importar"
 @using CashPilot.Infrastructure.Importing
 @inject CashPilotStore Store
+@inject ToastService Toasts
 
 <PageTitle>Importar — CashPilot</PageTitle>
 
@@ -42,6 +43,42 @@
     }
 </section>
 
+<section class="card-box wide">
+    <h2>Fatura de cartão ou extrato (texto)</h2>
+    <p class="muted">
+        Escolha de qual conta ou cartão são os lançamentos e cole as linhas copiadas do app (ou envie um .txt).
+        Aceita "05 Out" ou "05/10" sozinhos numa linha, valendo para as linhas de baixo; "Parcela 1 de 3" numa linha vira
+        a parcela do lançamento acima; linhas com # no começo são ignoradas.
+        Pode colar de novo o mesmo trecho: o que já existe não duplica.
+    </p>
+    <div class="filters">
+        <label>Conta ou cartão
+            <input list="dl-sources" @bind="_source" placeholder="ex.: Cartão Bradesco PF" />
+            <datalist id="dl-sources">
+                @foreach (var name in _sources)
+                {
+                    <option value="@name"></option>
+                }
+            </datalist>
+        </label>
+        <label class="check"><input type="checkbox" @bind="_positiveAreExpenses" /> valores positivos são gastos (fatura de cartão)</label>
+    </div>
+    <InputFile OnChange="LoadText" accept=".txt,.csv,text/plain" />
+    <textarea class="paste" rows="10" @bind="_pasted" @bind:event="oninput" placeholder="05 Out&#10;ANTHROPIC* CLAUDE SUB   R$ 110,00&#10;CIZI MERCADO EXPRESS   R$ 19,56"></textarea>
+    <p><button class="primary" @onclick="ImportText">Importar para @(string.IsNullOrWhiteSpace(_source) ? "…" : _source)</button></p>
+
+    @if (_text is not null)
+    {
+        <ul class="result">
+            <li><strong>@_textEntries</strong> lançamentos lidos</li>
+            <li><strong>@_text.Inserted</strong> novos, <strong>@_text.Duplicates</strong> já existiam</li>
+            <li><strong>@_text.ClassifiedByRules</strong> classificados por regras, <strong>@_text.CardCashOut</strong> saques na maquininha</li>
+            <li><strong>@_text.Pending</strong> pendentes (<a href="pendentes">classificar</a>)</li>
+        </ul>
+    }
+    <Rejected Items="_textRejected" />
+</section>
+
 @if (_error is not null)
 {
     <p class="error">@_error</p>
@@ -51,8 +88,48 @@
     private const long MaxBytes = 5 * 1024 * 1024;
 
     private ImportResult? _gastos;
+    private ImportResult? _text;
+    private int _textEntries;
+    private IReadOnlyList<RejectedRow> _textRejected = Array.Empty<RejectedRow>();
+    private List<string> _sources = new();
+    private string _source = "";
+    private string _pasted = "";
+    private bool _positiveAreExpenses = true;
     private RulesImportResult? _rules;
     private string? _error;
+
+    protected override void OnInitialized()
+    {
+        _sources = Store.GetAccounts().Select(a => a.Name)
+            .Concat(Store.GetAccountNamesInUse())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(n => n, StringComparer.CurrentCultureIgnoreCase)
+            .ToList();
+    }
+
+    private async Task LoadText(InputFileChangeEventArgs e)
+    {
+        var text = await ReadAsync(e);
+        if (text is not null) _pasted = text;
+    }
+
+    private void ImportText()
+    {
+        _error = null;
+        _text = null;
+        _textRejected = Array.Empty<RejectedRow>();
+        if (string.IsNullOrWhiteSpace(_source)) { _error = "Escolha a conta ou o cartão."; return; }
+        if (string.IsNullOrWhiteSpace(_pasted)) { _error = "Cole as linhas do extrato ou da fatura."; return; }
+
+        var today = DateOnly.FromDateTime(DateTime.Today);
+        var converted = StatementText.ToGastosCsv(_pasted, _source, today, _positiveAreExpenses);
+        _textEntries = converted.Entries;
+        _textRejected = converted.Rejected;
+        if (converted.Entries == 0) { _error = "Nenhum lançamento reconhecido."; return; }
+
+        _text = new GastosImporter(Store).Import(new StringReader(converted.Csv), "texto:" + _source.Trim());
+        Toasts.Success($"Importado em {_source.Trim()}: {_text.Inserted} novos, {_text.Duplicates} já existiam.");
+    }
 
     private async Task<string?> ReadAsync(InputFileChangeEventArgs e)
     {
@@ -77,6 +154,7 @@
         try
         {
             _gastos = new GastosImporter(Store).Import(new StringReader(text), e.File.Name);
+            Toasts.Success($"Planilha importada: {_gastos.Inserted} novas, {_gastos.Duplicates} já existiam.");
         }
         catch (Exception ex) when (ex is InvalidDataException or FormatException)
         {
@@ -92,6 +170,7 @@
         try
         {
             _rules = new RulesImporter(Store).Import(new StringReader(text));
+            Toasts.Success($"Regras importadas: {_rules.RulesSaved} salvas, {_rules.Reclassified} lançamentos classificados.");
         }
         catch (Exception ex) when (ex is InvalidDataException or FormatException)
         {

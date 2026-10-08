@@ -1,5 +1,6 @@
 @page "/regras"
 @inject CashPilotStore Store
+@inject ToastService Toasts
 
 <PageTitle>Categorias e regras — CashPilot</PageTitle>
 
@@ -122,6 +123,7 @@
         if (target.Length == 0 || target == name) return;
         var changed = Store.RenameCategory(name, target);
         _message = $"\"{name}\" → \"{target}\": {changed} lançamentos atualizados.";
+        Toasts.Success(_message);
         Reload();
     }
 
@@ -137,6 +139,7 @@
         Store.SaveRule(RuleKind.Contains, _newPattern, new Classification(_newCategory.Trim(), _newItem.Trim()));
         var classified = Store.ReclassifyPending();
         _message = $"Regra salva. {classified} pendentes classificados.";
+        Toasts.Success(_message);
         _newPattern = _newCategory = _newItem = "";
         Reload();
     }
@@ -144,6 +147,7 @@
     private void Delete(long id)
     {
         Store.DeleteRule(id);
+        Toasts.Success("Regra excluída.");
         Reload();
     }
 

@@ -56,3 +56,24 @@ code { background: var(--line); padding: 1px 6px; border-radius: 4px; }
 .result { margin: 12px 0; padding-left: 20px; }
 
 .card-box.wide { max-width: 1100px; }
+
+.neg { color: var(--warn); }
+
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+
+textarea.paste { width: 100%; min-height: 180px; margin: 12px 0; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--text); font: inherit; box-sizing: border-box; }
+.filters label.check { flex-direction: row; align-items: center; gap: 8px; align-self: flex-end; }
+
+.toasts { position: fixed; right: 20px; bottom: 20px; display: flex; flex-direction: column; gap: 8px; z-index: 50; pointer-events: none; }
+.toast { background: var(--accent); color: var(--accent-text); padding: 10px 16px; border-radius: 10px; box-shadow: 0 4px 14px rgba(0, 0, 0, .18); font-size: 14px; animation: toast-in .18s ease-out; }
+.toast-error { background: var(--danger); color: #fff; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+tr.saved td { animation: saved-row 1.6s ease-out; }
+@keyframes saved-row { from { background: var(--bar); } to { background: transparent; } }
+.confirm { display: inline-flex; gap: 6px; align-items: center; }
+button.danger { background: var(--danger); color: #fff; border-color: var(--danger); }
+tbody.group + tbody.group { border-top: 1px solid var(--line); }
+tr.detail td { background: var(--bg); padding: 4px 12px 10px 28px; }
+.detail-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.detail-table td { padding: 4px 8px; border-bottom: 1px solid var(--line); background: transparent; }

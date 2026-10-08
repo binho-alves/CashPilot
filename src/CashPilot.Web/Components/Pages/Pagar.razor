@@ -1,0 +1,204 @@
+@page "/pagar"
+@using CashPilot.Domain.Accounts
+@using CashPilot.Domain.Payments
+@inject CashPilotStore Store
+@inject ToastService Toasts
+
+<PageTitle>Contas a pagar — CashPilot</PageTitle>
+
+<h1>Contas a pagar</h1>
+
+@if (_banks.Any(b => b.BalanceAnchor is null))
+{
+    <p class="error">
+        Informe o saldo real de cada conta bancária abaixo (coluna "Corrigir saldo"). Sem isso, o saldo é a soma de todo o
+        histórico importado e não é confiável.
+    </p>
+}
+
+<div class="cards">
+    <div class="card"><div class="muted">Saldo nas contas bancárias</div><strong>@Money(_totalBalance)</strong></div>
+    <div class="card"><div class="muted">A pagar em 30 dias</div><strong>@Money(_next30)</strong></div>
+    <div class="card"><div class="muted">A pagar (tudo)</div><strong>@Money(_all)</strong></div>
+    <div class="card"><div class="muted">Atrasado</div><strong>@Money(_overdue)</strong></div>
+</div>
+
+<section class="card-box wide">
+    <h2>De onde tirar o dinheiro</h2>
+    <p class="muted">
+        O saldo é o valor que você informou mais os lançamentos depois da data dele. Se estiver errado, digite o saldo real:
+        ele vira a nova base a partir de hoje.
+    </p>
+    @if (_banks.Count == 0)
+    {
+        <p class="muted">Cadastre suas contas bancárias em <a href="contas">Contas</a>.</p>
+    }
+    else
+    {
+        <table class="grid">
+            <thead>
+                <tr><th>Conta</th><th class="num">Saldo</th><th>Base</th><th class="num">LIS disponível</th><th>LIS</th><th>Corrigir saldo</th><th></th></tr>
+            </thead>
+            <tbody>
+                @foreach (var bank in _banks)
+                {
+                    var balance = _balances[bank.Name];
+                    <tr @key="bank.Name">
+                        <td>@bank.Name</td>
+                        <td class="num @(balance < 0 ? "neg" : "")">@Money(balance)</td>
+                        <td class="muted">@(bank.BalanceAnchorDate is { } d ? $"{Money(bank.BalanceAnchor ?? 0)} em {d:dd/MM/yyyy}" : "sem base")</td>
+                        <td class="num">@(bank.OverdraftLimit is { } l ? Money(Math.Max(0, l + Math.Min(0, balance))) : "—")</td>
+                        <td class="muted">@LisText(bank)</td>
+                        <td><input value="@BalanceInput(bank.Name)" data-money="brl-signed" inputmode="numeric" placeholder="R$ saldo real" @onchange="e => _balanceInputs[bank.Name] = e.Value?.ToString() ?? string.Empty" /></td>
+                        <td><button @onclick="() => SetBalance(bank.Name)">Ajustar</button></td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+    @if (_balanceError is not null) { <p class="error">@_balanceError</p> }
+</section>
+
+<section class="card-box wide">
+    <h2>Novo boleto ou conta avulsa</h2>
+    <div class="filters">
+        <label>Descrição <input @bind="_newDescription" placeholder="ex.: Condomínio" /></label>
+        <label>Vencimento <input type="date" @bind="_newDue" /></label>
+        <label>Valor (R$) <input @bind="_newAmount" data-money="brl" inputmode="numeric" placeholder="R$ 0,00" /></label>
+        <label>&nbsp;<button class="primary" @onclick="AddPayable">Adicionar</button></label>
+    </div>
+    @if (_error is not null) { <p class="error">@_error</p> }
+</section>
+
+<section class="card-box wide">
+    <h2>O que falta pagar</h2>
+    @if (_upcoming.Count == 0)
+    {
+        <p class="muted">Nada a pagar. Cadastre os cartões com fechamento e vencimento em <a href="contas">Contas</a> para as faturas aparecerem.</p>
+    }
+    else
+    {
+        <table class="grid">
+            <thead>
+                <tr><th>Vencimento</th><th>O que</th><th>Origem</th><th class="num">Valor</th><th></th></tr>
+            </thead>
+            <tbody>
+                @foreach (var item in _upcoming)
+                {
+                    <tr @key="@($"{item.Kind}-{item.DueDate}-{item.Description}-{item.Amount}")">
+                        <td class="@(item.Overdue ? "neg" : "")">@item.DueDate.ToString("dd/MM/yyyy")@(item.Overdue ? " (atrasado)" : "")</td>
+                        <td>@item.Description</td>
+                        <td class="muted">@KindLabel(item)</td>
+                        <td class="num">@Money(item.Amount)</td>
+                        <td class="actions">
+                            @if (item.PayableId is { } id)
+                            {
+                                <button class="primary" @onclick="() => MarkPaid(id)">Pago</button>
+                                <button @onclick="() => Delete(id)">Excluir</button>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+</section>
+
+@code {
+    private static readonly CultureInfo Br = new("pt-BR");
+
+    private List<Account> _banks = new();
+    private Dictionary<string, decimal> _balances = new();
+    private readonly Dictionary<string, string> _balanceInputs = new();
+    private IReadOnlyList<UpcomingPayment> _upcoming = Array.Empty<UpcomingPayment>();
+    private decimal _totalBalance, _next30, _all, _overdue;
+
+    private string _newDescription = "";
+    private DateOnly _newDue = DateOnly.FromDateTime(DateTime.Today);
+    private string _newAmount = "";
+    private string? _error;
+    private string? _balanceError;
+
+    private static DateOnly Today => DateOnly.FromDateTime(DateTime.Today);
+
+    protected override void OnInitialized() => Reload();
+
+    private void Reload()
+    {
+        var accounts = Store.GetAccounts();
+        var transactions = Store.GetAll();
+        _banks = accounts.Where(a => a.Kind == AccountKind.BankAccount).ToList();
+        _balances = _banks.ToDictionary(b => b.Name, b => AccountBalance.Current(b, transactions, Today));
+        _totalBalance = _balances.Values.Sum();
+
+        _upcoming = PaymentSchedule.Build(accounts, transactions, Store.GetPayables(), Today);
+        _all = _upcoming.Sum(u => u.Amount);
+        _overdue = _upcoming.Where(u => u.Overdue).Sum(u => u.Amount);
+        _next30 = _upcoming.Where(u => u.DueDate <= Today.AddDays(30)).Sum(u => u.Amount);
+        _balanceInputs.Clear();
+    }
+
+    private static string Money(decimal value) => "R$ " + value.ToString("N2", Br);
+
+    private static string LisText(Account bank) => string.Join(" · ", new[]
+    {
+        bank.OverdraftLimit is { } l ? $"limite {Money(l)}" : null,
+        bank.OverdraftFreeDays is { } d ? $"{d} dias sem juros" : null,
+        bank.OverdraftMonthlyRatePercent is { } r ? $"{r.ToString("N2", Br)}% ao mês" : null,
+    }.Where(x => x is not null));
+
+    private string BalanceInput(string name) => _balanceInputs.TryGetValue(name, out var v) ? v : "";
+
+    private static string KindLabel(UpcomingPayment item) => item.Kind switch
+    {
+        UpcomingKind.CardBill => "Fatura do cartão",
+        UpcomingKind.Payable => "Avulso",
+        _ => "Lançamento futuro" + (item.Account is null ? "" : " · " + item.Account),
+    };
+
+    private void SetBalance(string name)
+    {
+        _balanceError = null;
+        var text = BalanceInput(name).Replace("R$", "").Trim();
+        if (!decimal.TryParse(text, NumberStyles.Number | NumberStyles.AllowLeadingSign, Br, out var value))
+        {
+            _balanceError = "Saldo inválido. Use o formato 1.234,56 (negativo com sinal de menos).";
+            return;
+        }
+
+        Store.SetAccountBalance(name, value, Today);
+        Toasts.Success($"Saldo de {name} ajustado para {Money(value)}.");
+        Reload();
+    }
+
+    private void AddPayable()
+    {
+        _error = null;
+        if (string.IsNullOrWhiteSpace(_newDescription)) { _error = "Informe a descrição."; return; }
+        if (!decimal.TryParse(_newAmount.Replace("R$", "").Trim(), NumberStyles.Number, Br, out var amount) || amount <= 0)
+        {
+            _error = "Valor inválido.";
+            return;
+        }
+
+        Store.AddPayable(new Payable { Description = _newDescription, DueDate = _newDue, Amount = amount });
+        Toasts.Success("Adicionado: " + _newDescription.Trim());
+        _newDescription = "";
+        _newAmount = "";
+        Reload();
+    }
+
+    private void MarkPaid(Guid id)
+    {
+        Store.SetPayablePaid(id, true, Today);
+        Toasts.Success("Marcado como pago.");
+        Reload();
+    }
+
+    private void Delete(Guid id)
+    {
+        Store.DeletePayable(id);
+        Toasts.Success("Excluído.");
+        Reload();
+    }
+}

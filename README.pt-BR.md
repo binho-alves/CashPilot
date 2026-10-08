@@ -38,6 +38,6 @@ R$ 1.000 a 3,09% (1x): custo R$ 30,90, líquido R$ 969,10. A tabela de taxas por
 
 - Importação pela web (envio do CSV) e cadastro de categorias e regras
 - Cadastro de contas (limite, fechamento, vencimento)
-- Tela "Contas a pagar": tudo o que há para pagar, ao lado das contas bancárias e saldos, para saber de onde tirar o dinheiro
+- Tela "Contas a pagar" (feita): faturas dos cartões (pelo fechamento e vencimento), boletos avulsos e lançamentos futuros, ao lado das contas bancárias e saldos (saldo informado por você + lançamentos depois dele)
 - Cheque especial (LIS) por conta: dias sem juros e taxa de juros
-- Calendário de vencimentos e simulador de custo
+- Calendário de vencimentos e simulador de custo (feitos: LIS e saque na maquininha; faltam boleto atrasado e rotativo)

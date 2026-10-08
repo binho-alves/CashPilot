@@ -28,4 +28,11 @@ public sealed record Account
     public int? OverdraftFreeDays { get; init; }
     /// <summary>Overdraft interest, percent per month (e.g. 8 for 8%).</summary>
     public decimal? OverdraftMonthlyRatePercent { get; init; }
+
+    /// <summary>
+    /// Hand-set balance and the date it was set. The current balance is this amount plus the entries dated after it,
+    /// so a wrong figure is fixed by typing the real balance again.
+    /// </summary>
+    public decimal? BalanceAnchor { get; init; }
+    public DateOnly? BalanceAnchorDate { get; init; }
 }
