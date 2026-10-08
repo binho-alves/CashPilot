@@ -427,7 +427,10 @@ public sealed class CashPilotStore : IDisposable
     {
         var result = new List<Payable>();
         using var command = CreateCommand(
-            "SELECT id, description, due_date, amount_cents, paid, paid_date FROM payables ORDER BY due_date, description;");
+            """
+            SELECT id, description, due_date, amount_cents, paid, paid_date, late_fee_percent, late_interest_monthly_percent
+            FROM payables ORDER BY due_date, description;
+            """);
         using var reader = command.ExecuteReader();
         while (reader.Read())
         {
@@ -441,6 +444,8 @@ public sealed class CashPilotStore : IDisposable
                 PaidDate = reader.IsDBNull(5)
                     ? null
                     : DateOnly.ParseExact(reader.GetString(5), "yyyy-MM-dd", CultureInfo.InvariantCulture),
+                LateFeePercent = reader.IsDBNull(6) ? null : decimal.Parse(reader.GetString(6), CultureInfo.InvariantCulture),
+                LateInterestMonthlyPercent = reader.IsDBNull(7) ? null : decimal.Parse(reader.GetString(7), CultureInfo.InvariantCulture),
             });
         }
         return result;
@@ -452,13 +457,17 @@ public sealed class CashPilotStore : IDisposable
         if (payable.Amount <= 0) throw new ArgumentException("Amount must be positive.", nameof(payable));
 
         using var command = CreateCommand("""
-            INSERT INTO payables (id, description, due_date, amount_cents, paid, paid_date)
-            VALUES ($id, $description, $due, $cents, 0, NULL);
+            INSERT INTO payables (id, description, due_date, amount_cents, paid, paid_date, late_fee_percent, late_interest_monthly_percent)
+            VALUES ($id, $description, $due, $cents, 0, NULL, $fee, $interest);
             """);
         command.Parameters.AddWithValue("$id", payable.Id.ToString());
         command.Parameters.AddWithValue("$description", payable.Description.Trim());
         command.Parameters.AddWithValue("$due", payable.DueDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
         command.Parameters.AddWithValue("$cents", ToCents(payable.Amount));
+        command.Parameters.AddWithValue("$fee", payable.LateFeePercent is { } fee
+            ? fee.ToString(CultureInfo.InvariantCulture) : DBNull.Value);
+        command.Parameters.AddWithValue("$interest", payable.LateInterestMonthlyPercent is { } interest
+            ? interest.ToString(CultureInfo.InvariantCulture) : DBNull.Value);
         command.ExecuteNonQuery();
     }
 

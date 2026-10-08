@@ -1,4 +1,5 @@
 using CashPilot.Domain.Accounts;
+using CashPilot.Domain.Payments;
 
 namespace CashPilot.Domain.Interest;
 
@@ -6,6 +7,7 @@ public enum FundingKind
 {
     Overdraft = 1,
     CardCashOut = 2,
+    LateBoleto = 3,
 }
 
 /// <summary>
@@ -24,7 +26,8 @@ public sealed record FundingOption(
 /// <summary>
 /// "I need R$ X for N days: what is the cheapest way?" Compares the options whose terms are registered:
 /// overdraft (LIS) of each bank account that has a rate, and the card-terminal cash-out at 1x to 12x.
-/// Boleto late fees and revolving credit are not modelled yet (no rates registered).
+/// A boleto whose multa and juros de mora are registered can also be left unpaid for a while (its extra cost is the
+/// option's cost). Revolving credit is not modelled yet (no rates registered).
 /// </summary>
 public static class CostSimulator
 {
@@ -36,6 +39,18 @@ public static class CostSimulator
     {
         var chargedDays = Math.Max(0, days - Math.Max(0, freeDays));
         return Math.Round(amount * monthlyRatePercent / 100m * chargedDays / 30m, 2, MidpointRounding.AwayFromZero);
+    }
+
+    /// <summary>
+    /// What a boleto costs on top of its amount when paid <paramref name="daysLate"/> days after the due date: the one-off
+    /// multa plus juros de mora, simple and pro rata by day (monthly rate / 30). Nothing is due when it is not late.
+    /// </summary>
+    public static decimal BoletoLateCost(decimal amount, decimal feePercent, decimal monthlyInterestPercent, int daysLate)
+    {
+        if (daysLate <= 0) return 0m;
+        var fee = amount * feePercent / 100m;
+        var interest = amount * monthlyInterestPercent / 100m * daysLate / 30m;
+        return Math.Round(fee + interest, 2, MidpointRounding.AwayFromZero);
     }
 
     /// <summary>Smallest gross charge on the card whose net, after the terminal fee, is at least <paramref name="net"/>.</summary>
@@ -58,7 +73,9 @@ public static class CostSimulator
         int days,
         IEnumerable<Account> accounts,
         IReadOnlyDictionary<string, decimal> balances,
-        CashAdvanceFeeTable? feeTable = null)
+        CashAdvanceFeeTable? feeTable = null,
+        IEnumerable<Payable>? payables = null,
+        DateOnly? today = null)
     {
         if (amount <= 0) throw new ArgumentOutOfRangeException(nameof(amount));
         if (days < 1) throw new ArgumentOutOfRangeException(nameof(days));
@@ -96,6 +113,33 @@ public static class CostSimulator
                 amount,
                 cashOut.Gross - amount,
                 true));
+        }
+
+        // Leaving a boleto unpaid until the end of the period: only the extra late cost counts (a multa already
+        // incurred because it is overdue today is not a consequence of this choice).
+        if (payables is not null)
+        {
+            var start = today ?? DateOnly.FromDateTime(DateTime.Today);
+            var payAt = start.AddDays(days);
+            foreach (var bill in payables.Where(p => !p.Paid && p.LateFeePercent is not null && p.LateInterestMonthlyPercent is not null))
+            {
+                var lateAtPayment = payAt.DayNumber - bill.DueDate.DayNumber;
+                if (lateAtPayment <= 0) continue;
+                var lateToday = Math.Max(0, start.DayNumber - bill.DueDate.DayNumber);
+                var fee = bill.LateFeePercent!.Value;
+                var interest = bill.LateInterestMonthlyPercent!.Value;
+                var cost = BoletoLateCost(bill.Amount, fee, interest, lateAtPayment)
+                           - BoletoLateCost(bill.Amount, fee, interest, lateToday);
+                var feasible = bill.Amount >= amount;
+                options.Add(new FundingOption(
+                    FundingKind.LateBoleto,
+                    $"Atrasar boleto: {bill.Description}",
+                    $"venceu/vence {bill.DueDate:dd/MM}, pago em {payAt:dd/MM} ({lateAtPayment} dias de atraso): multa {fee:0.##}% + mora {interest:0.##}% ao mês",
+                    amount,
+                    cost,
+                    feasible,
+                    feasible ? null : $"o boleto é de R$ {bill.Amount:N2}"));
+            }
         }
 
         return options

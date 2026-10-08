@@ -65,8 +65,11 @@
         <label>Descrição <input @bind="_newDescription" placeholder="ex.: Condomínio" /></label>
         <label>Vencimento <input type="date" @bind="_newDue" /></label>
         <label>Valor (R$) <input @bind="_newAmount" data-money="brl" inputmode="numeric" placeholder="R$ 0,00" /></label>
+        <label>Multa por atraso (%) <input @bind="_newFee" inputmode="decimal" placeholder="2" /></label>
+        <label>Juros de mora (% ao mês) <input @bind="_newInterest" inputmode="decimal" placeholder="1" /></label>
         <label>&nbsp;<button class="primary" @onclick="AddPayable">Adicionar</button></label>
     </div>
+    <p class="muted">Multa e juros de mora vêm impressos no boleto (o comum é 2% e 1% ao mês). Com eles preenchidos, o Simulador mostra quanto custaria atrasar este boleto. Deixe em branco para não considerar.</p>
     @if (_error is not null) { <p class="error">@_error</p> }
 </section>
 
@@ -116,6 +119,8 @@
     private string _newDescription = "";
     private DateOnly _newDue = DateOnly.FromDateTime(DateTime.Today);
     private string _newAmount = "";
+    private string _newFee = "2";
+    private string _newInterest = "1";
     private string? _error;
     private string? _balanceError;
 
@@ -181,11 +186,34 @@
             return;
         }
 
-        Store.AddPayable(new Payable { Description = _newDescription, DueDate = _newDue, Amount = amount });
+        if (!TryRate(_newFee, out var fee) || !TryRate(_newInterest, out var interest))
+        {
+            _error = "Multa e juros devem ser percentuais entre 0 e 100 (ex.: 2 ou 1,5), ou ficar em branco.";
+            return;
+        }
+
+        Store.AddPayable(new Payable
+        {
+            Description = _newDescription,
+            DueDate = _newDue,
+            Amount = amount,
+            LateFeePercent = fee,
+            LateInterestMonthlyPercent = interest,
+        });
         Toasts.Success("Adicionado: " + _newDescription.Trim());
         _newDescription = "";
         _newAmount = "";
         Reload();
+    }
+
+    /// <summary>Blank means "not registered" (null); anything else must be a percentage from 0 to 100.</summary>
+    private static bool TryRate(string text, out decimal? rate)
+    {
+        rate = null;
+        if (string.IsNullOrWhiteSpace(text)) return true;
+        if (!decimal.TryParse(text.Replace("%", "").Trim(), NumberStyles.Number, Br, out var value) || value < 0 || value > 100) return false;
+        rate = value;
+        return true;
     }
 
     private void MarkPaid(Guid id)

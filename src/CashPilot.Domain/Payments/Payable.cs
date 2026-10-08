@@ -9,4 +9,10 @@ public sealed record Payable
     public required decimal Amount { get; init; }
     public bool Paid { get; init; }
     public DateOnly? PaidDate { get; init; }
+
+    /// <summary>One-off penalty (multa) charged when paid after the due date, in percent of the amount. Printed on the boleto.</summary>
+    public decimal? LateFeePercent { get; init; }
+
+    /// <summary>Late interest (juros de mora) in percent per month, charged pro rata by day of delay. Printed on the boleto.</summary>
+    public decimal? LateInterestMonthlyPercent { get; init; }
 }

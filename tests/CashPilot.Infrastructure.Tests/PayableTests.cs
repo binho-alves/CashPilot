@@ -31,6 +31,25 @@ public class PayableTests
     }
 
     [Fact]
+    public void LateTermsAreSavedAndAreOptional()
+    {
+        using var store = new CashPilotStore(":memory:");
+        var due = new DateOnly(2026, 10, 15);
+        store.AddPayable(new Payable
+        {
+            Description = "Com taxas", DueDate = due, Amount = 100m,
+            LateFeePercent = 2m, LateInterestMonthlyPercent = 1.5m,
+        });
+        store.AddPayable(new Payable { Description = "Sem taxas", DueDate = due, Amount = 100m });
+
+        var saved = store.GetPayables().ToDictionary(p => p.Description);
+        Assert.Equal(2m, saved["Com taxas"].LateFeePercent);
+        Assert.Equal(1.5m, saved["Com taxas"].LateInterestMonthlyPercent);
+        Assert.Null(saved["Sem taxas"].LateFeePercent);
+        Assert.Null(saved["Sem taxas"].LateInterestMonthlyPercent);
+    }
+
+    [Fact]
     public void InvalidPayablesAreRejected()
     {
         using var store = new CashPilotStore(":memory:");

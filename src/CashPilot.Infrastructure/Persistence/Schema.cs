@@ -71,6 +71,12 @@ internal static class Schema
         """
         ALTER TABLE transactions ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0;
         """,
+
+        // v5: late-payment terms printed on a boleto (multa and juros de mora), used by the simulator.
+        """
+        ALTER TABLE payables ADD COLUMN late_fee_percent TEXT NULL;
+        ALTER TABLE payables ADD COLUMN late_interest_monthly_percent TEXT NULL;
+        """,
     ];
 
     public static void Apply(SqliteConnection connection)

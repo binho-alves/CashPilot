@@ -1,5 +1,6 @@
 using CashPilot.Domain.Accounts;
 using CashPilot.Domain.Interest;
+using CashPilot.Domain.Payments;
 
 namespace CashPilot.Domain.Tests;
 
@@ -76,5 +77,73 @@ public class CostSimulatorTests
         var options = CostSimulator.Compare(500m, 5, new[] { noRate }, new Dictionary<string, decimal>());
 
         Assert.All(options, o => Assert.Equal(FundingKind.CardCashOut, o.Kind));
+    }
+    [Theory]
+    [InlineData(1000, 0)]    // paid on the due date: nothing extra
+    [InlineData(1000, -3)]   // paid early
+    [InlineData(1000, 1)]    // 2% fee + 1 day of 1% a.m.: 20 + 0.33
+    [InlineData(1000, 30)]   // 2% fee + one full month of interest: 20 + 10
+    public void BoletoLateCostIsTheFeePlusProRataInterest(decimal amount, int daysLate)
+    {
+        var expected = daysLate <= 0 ? 0m : Math.Round(amount * 0.02m + amount * 0.01m * daysLate / 30m, 2, MidpointRounding.AwayFromZero);
+        Assert.Equal(expected, CostSimulator.BoletoLateCost(amount, 2m, 1m, daysLate));
+    }
+
+    private static readonly DateOnly Today = new(2026, 10, 8);
+
+    private static IReadOnlyList<FundingOption> CompareWith(decimal amount, int days, params Payable[] payables) =>
+        CostSimulator.Compare(amount, days, new[] { Bank }, new Dictionary<string, decimal>(), payables: payables, today: Today);
+
+    [Fact]
+    public void ABoletoDueBeforeTheEndOfThePeriodIsAnOptionWithItsExtraCost()
+    {
+        var bill = new Payable
+        {
+            Description = "Condomínio", DueDate = new DateOnly(2026, 10, 18), Amount = 1000m,
+            LateFeePercent = 2m, LateInterestMonthlyPercent = 1m,
+        };
+
+        var option = Assert.Single(CompareWith(1000m, 30, bill), o => o.Kind == FundingKind.LateBoleto);
+
+        // Paid on 07/11, due 18/10: 20 days late = 20 + 1000 x 1% x 20/30.
+        Assert.Equal(26.67m, option.Cost);
+        Assert.True(option.Feasible);
+        Assert.Contains("20 dias", option.Detail);
+    }
+
+    [Fact]
+    public void ABoletoAlreadyOverdueOnlyAddsTheInterestOfTheNewDays()
+    {
+        var bill = new Payable
+        {
+            Description = "Luz", DueDate = new DateOnly(2026, 10, 3), Amount = 900m,
+            LateFeePercent = 2m, LateInterestMonthlyPercent = 1m,
+        };
+
+        var option = Assert.Single(CompareWith(900m, 10, bill), o => o.Kind == FundingKind.LateBoleto);
+
+        // 5 days late today, 15 when paid: the fee is already owed, only 10 more days of interest = 900 x 1% x 10/30.
+        Assert.Equal(3m, option.Cost);
+    }
+
+    [Fact]
+    public void BoletosThatAreNotRelevantAreLeftOut()
+    {
+        var farAway = new Payable { Description = "Longe", DueDate = new DateOnly(2026, 12, 1), Amount = 500m, LateFeePercent = 2m, LateInterestMonthlyPercent = 1m };
+        var noTerms = new Payable { Description = "Sem taxas", DueDate = new DateOnly(2026, 10, 10), Amount = 500m };
+        var paid = new Payable { Description = "Pago", DueDate = new DateOnly(2026, 10, 10), Amount = 500m, Paid = true, LateFeePercent = 2m, LateInterestMonthlyPercent = 1m };
+
+        Assert.DoesNotContain(CompareWith(500m, 30, farAway, noTerms, paid), o => o.Kind == FundingKind.LateBoleto);
+    }
+
+    [Fact]
+    public void ABoletoSmallerThanTheNeedDoesNotCoverIt()
+    {
+        var bill = new Payable { Description = "Pequeno", DueDate = new DateOnly(2026, 10, 10), Amount = 200m, LateFeePercent = 2m, LateInterestMonthlyPercent = 1m };
+
+        var option = Assert.Single(CompareWith(1000m, 30, bill), o => o.Kind == FundingKind.LateBoleto);
+
+        Assert.False(option.Feasible);
+        Assert.Contains("200", option.Note);
     }
 }

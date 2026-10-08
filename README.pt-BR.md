@@ -40,7 +40,7 @@ R$ 1.000 a 3,09% (1x): custo R$ 30,90, líquido R$ 969,10. A tabela de taxas por
 - Cadastro de contas (limite, fechamento, vencimento)
 - Tela "Contas a pagar" (feita): faturas dos cartões (pelo fechamento e vencimento), boletos avulsos e lançamentos futuros, ao lado das contas bancárias e saldos (saldo informado por você + lançamentos depois dele)
 - Cheque especial (LIS) por conta: dias sem juros e taxa de juros
-- Calendário de vencimentos e simulador de custo (feitos: LIS e saque na maquininha; faltam boleto atrasado e rotativo)
+- Calendário de vencimentos e simulador de custo (feitos: LIS, saque na maquininha e atrasar um boleto, com a multa e os juros de mora cadastrados em cada boleto; falta o rotativo do cartão)
 - Importação de extratos (OFX de qualquer banco, CSV e PDF do Bradesco, PDF do Itaú) com prévia antes de gravar, sem duplicar e reconhecendo transferências entre as suas contas; faltam PDFs de outros bancos
 - Imagens de fatura/extrato (prints do app) lidas por OCR local e gratuito (Tesseract; precisa de `data/tessdata/por.traineddata`, fora do git); o texto lido aparece para você revisar antes de importar
 - Exclusão manual de lançamentos (a exclusão é lógica: reimportar o mesmo arquivo não traz de volta) e aviso rápido ao salvar

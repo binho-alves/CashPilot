@@ -8,7 +8,7 @@
 <h1>Simulador de custo</h1>
 
 <section class="card-box wide">
-    <p class="muted">Quanto você precisa e por quantos dias? O app compara o LIS das suas contas e o saque na maquininha de 1x a 12x.</p>
+    <p class="muted">Quanto você precisa e por quantos dias? O app compara o LIS das suas contas, o saque na maquininha de 1x a 12x e atrasar algum boleto seu (se multa e juros dele estiverem cadastrados em <a href="pagar">Contas a pagar</a>).</p>
     <div class="filters">
         <label>Preciso de (R$) <input @bind="_amountText" data-money="brl" inputmode="numeric" placeholder="R$ 1.000,00" /></label>
         <label>Por quantos dias <input type="number" min="1" max="365" @bind="_days" /></label>
@@ -49,7 +49,9 @@
         <p class="muted">
             O custo do LIS é juros simples proporcional aos dias além dos dias sem juros; não inclui IOF, então o real é um pouco maior.
             O saque na maquininha custa a taxa uma vez, independente dos dias, e o valor bruto vai para a fatura do cartão.
-            Boleto atrasado e rotativo do cartão ainda não entram: faltam as taxas cadastradas.
+            Atrasar um boleto custa a multa mais os juros de mora pelos dias além do vencimento (só o que passa a ser cobrado por causa
+            da sua escolha). Esse cálculo não considera protesto, negativação nem a chance de o beneficiário cobrar diferente do impresso:
+            confira o valor com o boleto atualizado. O rotativo do cartão ainda não entra: falta a taxa cadastrada.
         </p>
     </section>
 }
@@ -95,6 +97,6 @@
             .ToList();
 
         _amount = amount;
-        _options = CostSimulator.Compare(amount, _days, accounts, balances);
+        _options = CostSimulator.Compare(amount, _days, accounts, balances, payables: Store.GetPayables(), today: today);
     }
 }
