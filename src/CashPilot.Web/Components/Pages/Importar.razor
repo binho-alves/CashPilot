@@ -17,7 +17,7 @@
         ou a planilha de gastos. Os extratos mostram uma prévia antes de gravar; o que já foi importado, ou que parece
         repetir um lançamento que você já tem, não entra de novo.
     </p>
-    <InputFile OnChange="LoadFile" accept=".csv,.txt,.pdf,.png,.jpg,.jpeg,.bmp,.tif,.tiff,text/csv,text/plain,application/pdf,image/*" />
+    <InputFile OnChange="LoadFile" accept=".csv,.ofx,.qfx,.txt,.pdf,.png,.jpg,.jpeg,.bmp,.tif,.tiff,text/csv,text/plain,application/pdf,image/*" />
     @if (_fileMessage is not null)
     {
         <p class="muted">@_fileMessage</p>

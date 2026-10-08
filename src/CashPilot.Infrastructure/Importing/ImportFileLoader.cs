@@ -7,7 +7,7 @@ public enum ImportKind
     Unknown,
     /// <summary>The user's "Gastos" spreadsheet exported as CSV.</summary>
     GastosSheet,
-    /// <summary>A bank account statement (Bradesco CSV/PDF, Itaú PDF).</summary>
+    /// <summary>A bank account statement (OFX, Bradesco CSV/PDF, Itaú PDF).</summary>
     BankStatement,
     /// <summary>Plain text (pasted card bill lines, for example); needs the account chosen by the user.</summary>
     PlainText,
@@ -15,7 +15,7 @@ public enum ImportKind
 
 public sealed record LoadedFile(ImportKind Kind, string? Text = null, BankStatement? Statement = null, string? Error = null);
 
-/// <summary>Looks at an uploaded file (CSV, TXT or PDF) and says what it is, so the user does not have to choose.</summary>
+/// <summary>Looks at an uploaded file (CSV, OFX, TXT or PDF) and says what it is, so the user does not have to choose.</summary>
 public static class ImportFileLoader
 {
     public static LoadedFile Load(string fileName, byte[] bytes)
@@ -41,6 +41,9 @@ public static class ImportFileLoader
         }
 
         var text = Decode(bytes);
+
+        var ofx = OfxParser.TryParse(text);
+        if (ofx is not null) return new LoadedFile(ImportKind.BankStatement, Statement: ofx);
 
         var bank = BankStatementParsers.TryParseBradescoCsv(text);
         if (bank is not null) return new LoadedFile(ImportKind.BankStatement, Statement: bank);
