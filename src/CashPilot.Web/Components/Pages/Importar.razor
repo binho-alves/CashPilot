@@ -1,0 +1,102 @@
+@page "/importar"
+@using CashPilot.Infrastructure.Importing
+@inject CashPilotStore Store
+
+<PageTitle>Importar — CashPilot</PageTitle>
+
+<h1>Importar</h1>
+
+<section class="card-box">
+    <h2>Planilha de gastos (CSV)</h2>
+    <p class="muted">
+        Exporte a aba "Gastos" como CSV (colunas: Dia, Categoria, Ítem, Conta, Valor, Obs).
+        Pode enviar o mesmo arquivo de novo: lançamentos já importados não duplicam.
+    </p>
+    <InputFile OnChange="ImportGastos" accept=".csv,text/csv" />
+
+    @if (_gastos is not null)
+    {
+        <ul class="result">
+            <li><strong>@_gastos.RowsRead</strong> linhas lidas</li>
+            <li><strong>@_gastos.Inserted</strong> novas, <strong>@_gastos.Duplicates</strong> já existiam</li>
+            <li><strong>@_gastos.TaughtFromSheet</strong> ensinaram o classificador, <strong>@_gastos.ClassifiedByRules</strong> classificadas por regras</li>
+            <li><strong>@_gastos.CardCashOut</strong> saques na maquininha</li>
+            <li><strong>@_gastos.Pending</strong> pendentes (<a href="pendentes">classificar</a>)</li>
+        </ul>
+        <Rejected Items="_gastos.Rejected" />
+    }
+</section>
+
+<section class="card-box">
+    <h2>Regras (CSV)</h2>
+    <p class="muted">Colunas: pattern, category, item. Cada linha vira uma regra "contém" e reaplica nos pendentes.</p>
+    <InputFile OnChange="ImportRules" accept=".csv,text/csv" />
+
+    @if (_rules is not null)
+    {
+        <ul class="result">
+            <li><strong>@_rules.RulesSaved</strong> regras salvas</li>
+            <li><strong>@_rules.Reclassified</strong> lançamentos classificados, <strong>@_rules.StillPending</strong> ainda pendentes</li>
+        </ul>
+        <Rejected Items="_rules.Rejected" />
+    }
+</section>
+
+@if (_error is not null)
+{
+    <p class="error">@_error</p>
+}
+
+@code {
+    private const long MaxBytes = 5 * 1024 * 1024;
+
+    private ImportResult? _gastos;
+    private RulesImportResult? _rules;
+    private string? _error;
+
+    private async Task<string?> ReadAsync(InputFileChangeEventArgs e)
+    {
+        _error = null;
+        try
+        {
+            using var stream = e.File.OpenReadStream(MaxBytes);
+            using var reader = new StreamReader(stream);
+            return await reader.ReadToEndAsync();
+        }
+        catch (IOException ex)
+        {
+            _error = "Não foi possível ler o arquivo (limite 5 MB): " + ex.Message;
+            return null;
+        }
+    }
+
+    private async Task ImportGastos(InputFileChangeEventArgs e)
+    {
+        var text = await ReadAsync(e);
+        if (text is null) return;
+        try
+        {
+            _gastos = new GastosImporter(Store).Import(new StringReader(text), e.File.Name);
+        }
+        catch (Exception ex) when (ex is InvalidDataException or FormatException)
+        {
+            _gastos = null;
+            _error = ex.Message;
+        }
+    }
+
+    private async Task ImportRules(InputFileChangeEventArgs e)
+    {
+        var text = await ReadAsync(e);
+        if (text is null) return;
+        try
+        {
+            _rules = new RulesImporter(Store).Import(new StringReader(text));
+        }
+        catch (Exception ex) when (ex is InvalidDataException or FormatException)
+        {
+            _rules = null;
+            _error = ex.Message;
+        }
+    }
+}

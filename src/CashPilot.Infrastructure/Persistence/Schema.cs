@@ -36,6 +36,20 @@ internal static class Schema
             UNIQUE (kind, pattern)
         );
         """,
+
+        // v2: registered accounts (bank accounts, credit cards) with limits, bill days and overdraft (LIS) terms.
+        """
+        CREATE TABLE accounts (
+            name                    TEXT    NOT NULL PRIMARY KEY,
+            kind                    INTEGER NOT NULL,
+            credit_limit_cents      INTEGER NULL,
+            closing_day             INTEGER NULL,
+            due_day                 INTEGER NULL,
+            overdraft_limit_cents   INTEGER NULL,
+            overdraft_free_days     INTEGER NULL,
+            overdraft_monthly_rate  TEXT    NULL
+        );
+        """,
     ];
 
     public static void Apply(SqliteConnection connection)

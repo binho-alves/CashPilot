@@ -1,0 +1,158 @@
+@page "/regras"
+@inject CashPilotStore Store
+
+<PageTitle>Categorias e regras — CashPilot</PageTitle>
+
+<h1>Categorias e regras</h1>
+
+<datalist id="dl-categories">
+    @foreach (var category in _categories)
+    {
+        <option value="@category.Name"></option>
+    }
+</datalist>
+
+<section class="card-box wide">
+    <h2>Categorias</h2>
+    <p class="muted">Renomear vale para todos os lançamentos e regras. Renomear para um nome que já existe junta as duas categorias.</p>
+    <table class="grid">
+        <thead>
+            <tr><th>Categoria</th><th>Itens</th><th class="num">Lançamentos</th><th>Novo nome</th><th></th></tr>
+        </thead>
+        <tbody>
+            @foreach (var category in _categories)
+            {
+                <tr @key="category.Name">
+                    <td>@category.Name</td>
+                    <td class="muted">@string.Join(", ", category.Items)</td>
+                    <td class="num">@category.Count</td>
+                    <td><input value="@RenameFor(category.Name)" @onchange="e => _renames[category.Name] = e.Value?.ToString() ?? string.Empty" /></td>
+                    <td><button @onclick="() => Rename(category.Name)">Renomear</button></td>
+                </tr>
+            }
+        </tbody>
+    </table>
+    @if (_message is not null) { <p class="muted">@_message</p> }
+</section>
+
+<section class="card-box wide">
+    <h2>Nova regra</h2>
+    <p class="muted">Se a descrição contiver o texto, recebe a categoria e o item. Aplica nos pendentes e nas próximas importações.</p>
+    <div class="filters">
+        <label>Contém <input @bind="_newPattern" placeholder="ex.: UBER" /></label>
+        <label>Categoria <input list="dl-categories" @bind="_newCategory" /></label>
+        <label>Item <input @bind="_newItem" /></label>
+        <label>&nbsp;<button class="primary" @onclick="AddRule">Adicionar</button></label>
+    </div>
+    @if (_error is not null) { <p class="error">@_error</p> }
+</section>
+
+<section class="card-box wide">
+    <h2>Regras</h2>
+    <div class="filters">
+        <label>Busca <input @bind="_search" @bind:event="oninput" placeholder="texto, categoria ou item" /></label>
+    </div>
+    <p class="muted">@FilteredRules.Count de @_rules.Count regras.</p>
+    <table class="grid">
+        <thead>
+            <tr><th>Tipo</th><th>Texto</th><th>Categoria</th><th>Item</th><th></th></tr>
+        </thead>
+        <tbody>
+            @foreach (var rule in FilteredRules.Take(300))
+            {
+                <tr @key="rule.Id">
+                    <td>@KindLabel(rule.Kind)</td>
+                    <td>@rule.Pattern</td>
+                    <td>@rule.Classification.Category</td>
+                    <td>@rule.Classification.Item</td>
+                    <td><button title="Os lançamentos já classificados por ela não mudam" @onclick="() => Delete(rule.Id)">Excluir</button></td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</section>
+
+@code {
+    private sealed record CategoryRow(string Name, int Count, List<string> Items);
+
+    private List<CategoryRow> _categories = new();
+    private IReadOnlyList<StoredRule> _rules = Array.Empty<StoredRule>();
+    private readonly Dictionary<string, string> _renames = new();
+
+    private string _newPattern = "";
+    private string _newCategory = "";
+    private string _newItem = "";
+    private string _search = "";
+    private string? _error;
+    private string? _message;
+
+    protected override void OnInitialized() => Reload();
+
+    private void Reload()
+    {
+        _categories = Store.GetAll()
+            .Where(t => !string.IsNullOrEmpty(t.Category))
+            .GroupBy(t => t.Category!)
+            .Select(g => new CategoryRow(
+                g.Key,
+                g.Count(),
+                g.Select(t => t.Item).Where(i => !string.IsNullOrEmpty(i)).Select(i => i!).Distinct().OrderBy(i => i).ToList()))
+            .OrderBy(c => c.Name)
+            .ToList();
+        foreach (var rule in Store.GetKnownClassifications())
+            if (_categories.All(c => c.Name != rule.Category))
+                _categories.Add(new CategoryRow(rule.Category, 0, new List<string>()));
+        _categories = _categories.OrderBy(c => c.Name).ToList();
+        _rules = Store.GetRules();
+        _renames.Clear();
+    }
+
+    private string RenameFor(string name) => _renames.TryGetValue(name, out var value) ? value : name;
+
+    private IReadOnlyList<StoredRule> FilteredRules => _search.Length == 0
+        ? _rules
+        : _rules.Where(r =>
+            r.Pattern.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+            r.Classification.Category.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+            r.Classification.Item.Contains(_search, StringComparison.OrdinalIgnoreCase)).ToList();
+
+    private void Rename(string name)
+    {
+        var target = RenameFor(name).Trim();
+        if (target.Length == 0 || target == name) return;
+        var changed = Store.RenameCategory(name, target);
+        _message = $"\"{name}\" → \"{target}\": {changed} lançamentos atualizados.";
+        Reload();
+    }
+
+    private void AddRule()
+    {
+        _error = null;
+        if (string.IsNullOrWhiteSpace(_newPattern) || string.IsNullOrWhiteSpace(_newCategory))
+        {
+            _error = "Informe o texto e a categoria.";
+            return;
+        }
+
+        Store.SaveRule(RuleKind.Contains, _newPattern, new Classification(_newCategory.Trim(), _newItem.Trim()));
+        var classified = Store.ReclassifyPending();
+        _message = $"Regra salva. {classified} pendentes classificados.";
+        _newPattern = _newCategory = _newItem = "";
+        Reload();
+    }
+
+    private void Delete(long id)
+    {
+        Store.DeleteRule(id);
+        Reload();
+    }
+
+    private static string KindLabel(RuleKind kind) => kind switch
+    {
+        RuleKind.Exact => "Exata",
+        RuleKind.Contains => "Contém",
+        RuleKind.Ambiguous => "Ambígua",
+        RuleKind.CashOut => "Saque maquininha",
+        _ => kind.ToString(),
+    };
+}

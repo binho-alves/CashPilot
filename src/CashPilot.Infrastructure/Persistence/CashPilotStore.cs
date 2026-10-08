@@ -1,4 +1,5 @@
 using System.Globalization;
+using CashPilot.Domain.Accounts;
 using CashPilot.Domain.Descriptions;
 using CashPilot.Domain.Transactions;
 using Microsoft.Data.Sqlite;
@@ -21,6 +22,9 @@ public enum RuleKind
 /// SQLite store. Owns one open connection (use ":memory:" in tests).
 /// Money is stored as integer cents and dates as ISO text, to avoid floating point surprises.
 /// </summary>
+/// <summary>A rule as stored, with its row id so the UI can delete it.</summary>
+public sealed record StoredRule(long Id, RuleKind Kind, string Pattern, Classification Classification);
+
 public sealed class CashPilotStore : IDisposable
 {
     private readonly SqliteConnection _connection;
@@ -205,6 +209,128 @@ public sealed class CashPilotStore : IDisposable
         while (reader.Read())
             result.Add(new Classification(reader.GetString(0), reader.GetString(1)));
         return result;
+    }
+
+    /// <summary>Every stored rule (exact, contains, ambiguous, cash-out), ordered by kind then pattern.</summary>
+    public IReadOnlyList<StoredRule> GetRules()
+    {
+        var result = new List<StoredRule>();
+        using var command = CreateCommand(
+            "SELECT id, kind, pattern, category, item FROM classification_rules ORDER BY kind, pattern;");
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+            result.Add(new StoredRule(reader.GetInt64(0), (RuleKind)reader.GetInt32(1), reader.GetString(2),
+                new Classification(reader.GetString(3), reader.GetString(4))));
+        return result;
+    }
+
+    /// <summary>Deletes one rule. Entries already classified by it keep their category.</summary>
+    public bool DeleteRule(long id)
+    {
+        using var command = CreateCommand("DELETE FROM classification_rules WHERE id = $id;");
+        command.Parameters.AddWithValue("$id", id);
+        return command.ExecuteNonQuery() > 0;
+    }
+
+    /// <summary>
+    /// Renames a category on every stored entry and rule (also merges into an existing category).
+    /// Returns how many entries changed.
+    /// </summary>
+    public int RenameCategory(string from, string to)
+    {
+        if (string.IsNullOrWhiteSpace(to) || from == to) return 0;
+        to = to.Trim();
+
+        int changed;
+        using (var command = CreateCommand("UPDATE transactions SET category = $to WHERE category = $from;"))
+        {
+            command.Parameters.AddWithValue("$from", from);
+            command.Parameters.AddWithValue("$to", to);
+            changed = command.ExecuteNonQuery();
+        }
+        using (var command = CreateCommand("UPDATE classification_rules SET category = $to WHERE category = $from;"))
+        {
+            command.Parameters.AddWithValue("$from", from);
+            command.Parameters.AddWithValue("$to", to);
+            command.ExecuteNonQuery();
+        }
+        return changed;
+    }
+
+    /// <summary>Distinct account names used by stored entries (to offer them for registration).</summary>
+    public IReadOnlyList<string> GetAccountNamesInUse()
+    {
+        var result = new List<string>();
+        using var command = CreateCommand("SELECT DISTINCT account FROM transactions ORDER BY account;");
+        using var reader = command.ExecuteReader();
+        while (reader.Read()) result.Add(reader.GetString(0));
+        return result;
+    }
+
+    public IReadOnlyList<Account> GetAccounts()
+    {
+        var result = new List<Account>();
+        using var command = CreateCommand("""
+            SELECT name, kind, credit_limit_cents, closing_day, due_day,
+                   overdraft_limit_cents, overdraft_free_days, overdraft_monthly_rate
+            FROM accounts ORDER BY kind, name;
+            """);
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            result.Add(new Account
+            {
+                Name = reader.GetString(0),
+                Kind = (AccountKind)reader.GetInt32(1),
+                CreditLimit = reader.IsDBNull(2) ? null : FromCents(reader.GetInt64(2)),
+                ClosingDay = reader.IsDBNull(3) ? null : reader.GetInt32(3),
+                DueDay = reader.IsDBNull(4) ? null : reader.GetInt32(4),
+                OverdraftLimit = reader.IsDBNull(5) ? null : FromCents(reader.GetInt64(5)),
+                OverdraftFreeDays = reader.IsDBNull(6) ? null : reader.GetInt32(6),
+                OverdraftMonthlyRatePercent = reader.IsDBNull(7)
+                    ? null
+                    : decimal.Parse(reader.GetString(7), CultureInfo.InvariantCulture),
+            });
+        }
+        return result;
+    }
+
+    /// <summary>Creates or updates a registered account (matched by name).</summary>
+    public void SaveAccount(Account account)
+    {
+        if (string.IsNullOrWhiteSpace(account.Name)) throw new ArgumentException("Account name is required.", nameof(account));
+
+        using var command = CreateCommand("""
+            INSERT INTO accounts (name, kind, credit_limit_cents, closing_day, due_day,
+                                  overdraft_limit_cents, overdraft_free_days, overdraft_monthly_rate)
+            VALUES ($name, $kind, $limit, $closing, $due, $odLimit, $odDays, $odRate)
+            ON CONFLICT (name) DO UPDATE SET
+                kind = excluded.kind,
+                credit_limit_cents = excluded.credit_limit_cents,
+                closing_day = excluded.closing_day,
+                due_day = excluded.due_day,
+                overdraft_limit_cents = excluded.overdraft_limit_cents,
+                overdraft_free_days = excluded.overdraft_free_days,
+                overdraft_monthly_rate = excluded.overdraft_monthly_rate;
+            """);
+        command.Parameters.AddWithValue("$name", account.Name.Trim());
+        command.Parameters.AddWithValue("$kind", (int)account.Kind);
+        command.Parameters.AddWithValue("$limit", account.CreditLimit is { } l ? (object)ToCents(l) : DBNull.Value);
+        command.Parameters.AddWithValue("$closing", account.ClosingDay is { } c ? (object)c : DBNull.Value);
+        command.Parameters.AddWithValue("$due", account.DueDay is { } d ? (object)d : DBNull.Value);
+        command.Parameters.AddWithValue("$odLimit", account.OverdraftLimit is { } o ? (object)ToCents(o) : DBNull.Value);
+        command.Parameters.AddWithValue("$odDays", account.OverdraftFreeDays is { } f ? (object)f : DBNull.Value);
+        command.Parameters.AddWithValue("$odRate", account.OverdraftMonthlyRatePercent is { } r
+            ? (object)r.ToString(CultureInfo.InvariantCulture)
+            : DBNull.Value);
+        command.ExecuteNonQuery();
+    }
+
+    public bool DeleteAccount(string name)
+    {
+        using var command = CreateCommand("DELETE FROM accounts WHERE name = $name;");
+        command.Parameters.AddWithValue("$name", name);
+        return command.ExecuteNonQuery() > 0;
     }
 
     public HashSet<string> GetCashOutPatterns()

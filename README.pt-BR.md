@@ -33,3 +33,11 @@ O banco fica em `data/cashpilot.db` (mude com `--db`). Importar o mesmo arquivo 
 
 O cartão é cobrado pelo valor bruto, a conta recebe o líquido, e a diferença é a despesa.
 R$ 1.000 a 3,09% (1x): custo R$ 30,90, líquido R$ 969,10. A tabela de taxas por parcela (`CashAdvanceFeeTable`) já vem com as taxas de crédito da maquininha, de 1x a 12x (3,09% a 12,38%).
+
+## Próximos passos
+
+- Importação pela web (envio do CSV) e cadastro de categorias e regras
+- Cadastro de contas (limite, fechamento, vencimento)
+- Tela "Contas a pagar": tudo o que há para pagar, ao lado das contas bancárias e saldos, para saber de onde tirar o dinheiro
+- Cheque especial (LIS) por conta: dias sem juros e taxa de juros
+- Calendário de vencimentos e simulador de custo

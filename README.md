@@ -48,6 +48,8 @@ R$ 1,000 at 3.09% (1x): cost R$ 30.90, net R$ 969.10. The fee table by number of
 0. Domain + tests (done)
 1. Persistence (SQLite) and CSV/OFX importer; seed from the current spreadsheet
 2. Accounts, limits, bills and per-account interest rules
+   - "Bills to pay" screen: everything due, shown next to the bank accounts and balances (where to take the money from)
+   - Overdraft (LIS) settings per account: interest-free days and interest rate
 3. Payment calendar, cash-flow forecast and cost simulator
 4. C# API and mobile app
 

@@ -1,0 +1,16 @@
+@using CashPilot.Infrastructure.Importing
+
+@if (Items.Count > 0)
+{
+    <p class="error">@Items.Count linhas rejeitadas:</p>
+    <ul class="result">
+        @foreach (var row in Items.Take(20))
+        {
+            <li>linha @row.Line: @row.Reason</li>
+        }
+    </ul>
+}
+
+@code {
+    [Parameter] public IReadOnlyList<RejectedRow> Items { get; set; } = Array.Empty<RejectedRow>();
+}

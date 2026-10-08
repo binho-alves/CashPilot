@@ -43,8 +43,10 @@ The real spreadsheet and statements contain personal data. This repo is **public
 ## Roadmap
 0. Domain + tests — done
 1. SQLite persistence, `Gastos` CSV importer, manual rules, ambiguity, card cash-out type, monthly report — done (70 tests passing on the user's machine, .NET 10.0.12). Real sheet imported: 597 rows, ~86 still pending classification (the user classifies them with `classify`/`rules.csv`). Next in this phase: CSV/OFX bank-statement importers + transfer detection on stored data
-1b. Web app (in progress): Resumo + Pendentes done → next: Lançamentos list with filters, Importar (upload + preview), Categorias/Regras CRUD → Contas (cadastro with limit/closing/due; replaces free-text account names) → Calendário/Simulador
+1b. Web app (in progress): Resumo, Pendentes, Lançamentos (filters + inline reclassification), Importar (CSV upload, idempotent) and Categorias e regras (rename/merge categories, add/delete rules) built; Contas cadastro (kind, card limit/closing/due, LIS limit/free days/rate; schema v2) built → next: link entries to registered accounts + balances, Contas a pagar screen, Calendário/Simulador
 2. Accounts, limits, card bills (closing/due dates), per-account interest rules
+   - **Contas a pagar screen (requested by the user):** everything still to pay (card bills, boletos, installments) in one view, next to the user's bank accounts with balances, so it is clear which account to take the money from.
+   - **Overdraft (LIS) settings per bank account (requested):** register the number of interest-free days ("dias no LIS zero") and the LIS interest rate, so the simulator and the due-date calendar can compare it against cash-out, late boleto and revolving credit. (Confirm with the user which bank's LIS rules apply before modelling.)
 3. Payment calendar, cash-flow forecast, cost simulator (cash-out vs overdraft vs late boleto vs revolving credit)
 4. C# API, then mobile (.NET MAUI or Flutter) on the same API; Postgres instead of SQLite
 

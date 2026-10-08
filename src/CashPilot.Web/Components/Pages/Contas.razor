@@ -1,0 +1,215 @@
+@page "/contas"
+@using CashPilot.Domain.Accounts
+@inject CashPilotStore Store
+
+<PageTitle>Contas — CashPilot</PageTitle>
+
+<h1>Contas</h1>
+
+<section class="card-box wide">
+    <h2>@(_editing ? "Editar conta" : "Nova conta")</h2>
+    <p class="muted">
+        Cadastre contas bancárias e cartões. Use o mesmo nome que aparece nos lançamentos (coluna Conta).
+        Cartão: limite e dias de fechamento e vencimento. Conta bancária: limite do LIS, dias sem juros e juros ao mês.
+    </p>
+
+    <div class="filters">
+        <label>Nome
+            <input list="dl-names" @bind="_form.Name" disabled="@_editing" />
+            <datalist id="dl-names">
+                @foreach (var name in _unregistered)
+                {
+                    <option value="@name"></option>
+                }
+            </datalist>
+        </label>
+        <label>Tipo
+            <select @bind="_form.Kind">
+                <option value="@AccountKind.BankAccount">Conta bancária</option>
+                <option value="@AccountKind.CreditCard">Cartão de crédito</option>
+                <option value="@AccountKind.Cash">Dinheiro</option>
+                <option value="@AccountKind.Other">Outro</option>
+            </select>
+        </label>
+
+        @if (_form.Kind == AccountKind.CreditCard)
+        {
+            <label>Limite (R$) <input @bind="_form.CreditLimit" placeholder="0,00" /></label>
+            <label>Dia de fechamento <input type="number" min="1" max="31" @bind="_form.ClosingDay" /></label>
+            <label>Dia de vencimento <input type="number" min="1" max="31" @bind="_form.DueDay" /></label>
+        }
+        else if (_form.Kind == AccountKind.BankAccount)
+        {
+            <label>Limite do LIS (R$) <input @bind="_form.OverdraftLimit" placeholder="0,00" /></label>
+            <label>Dias sem juros no LIS <input type="number" min="0" max="365" @bind="_form.OverdraftFreeDays" /></label>
+            <label>Juros do LIS (% ao mês) <input @bind="_form.OverdraftRate" placeholder="0,00" /></label>
+        }
+
+        <label>&nbsp;
+            <span>
+                <button class="primary" @onclick="Save">Salvar</button>
+                @if (_editing) { <button @onclick="Cancel">Cancelar</button> }
+            </span>
+        </label>
+    </div>
+    @if (_error is not null) { <p class="error">@_error</p> }
+</section>
+
+<section class="card-box wide">
+    <h2>Contas cadastradas</h2>
+    @if (_accounts.Count == 0)
+    {
+        <p class="muted">Nenhuma conta cadastrada ainda.</p>
+    }
+    else
+    {
+        <table class="grid">
+            <thead>
+                <tr><th>Nome</th><th>Tipo</th><th>Detalhes</th><th></th></tr>
+            </thead>
+            <tbody>
+                @foreach (var account in _accounts)
+                {
+                    <tr @key="account.Name">
+                        <td>@account.Name</td>
+                        <td>@KindLabel(account.Kind)</td>
+                        <td class="muted">@Details(account)</td>
+                        <td class="actions">
+                            <button @onclick="() => Edit(account)">Editar</button>
+                            <button @onclick="() => Delete(account.Name)">Excluir</button>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+
+    @if (_unregistered.Count > 0)
+    {
+        <p class="muted">Nos lançamentos, ainda sem cadastro: @string.Join(", ", _unregistered)</p>
+    }
+</section>
+
+@code {
+    private static readonly CultureInfo Br = new("pt-BR");
+
+    private sealed class Form
+    {
+        public string Name { get; set; } = "";
+        public AccountKind Kind { get; set; } = AccountKind.BankAccount;
+        public string CreditLimit { get; set; } = "";
+        public int? ClosingDay { get; set; }
+        public int? DueDay { get; set; }
+        public string OverdraftLimit { get; set; } = "";
+        public int? OverdraftFreeDays { get; set; }
+        public string OverdraftRate { get; set; } = "";
+    }
+
+    private Form _form = new();
+    private bool _editing;
+    private string? _error;
+    private IReadOnlyList<Account> _accounts = Array.Empty<Account>();
+    private List<string> _unregistered = new();
+
+    protected override void OnInitialized() => Reload();
+
+    private void Reload()
+    {
+        _accounts = Store.GetAccounts();
+        var registered = _accounts.Select(a => a.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        _unregistered = Store.GetAccountNamesInUse().Where(n => !registered.Contains(n)).ToList();
+    }
+
+    private static bool TryMoney(string text, out decimal? value)
+    {
+        value = null;
+        if (string.IsNullOrWhiteSpace(text)) return true;
+        if (!decimal.TryParse(text.Replace("R$", "").Trim(), NumberStyles.Number, Br, out var parsed) || parsed < 0)
+            return false;
+        value = parsed;
+        return true;
+    }
+
+    private static bool ValidDay(int? day) => day is null or (>= 1 and <= 31);
+
+    private void Save()
+    {
+        _error = null;
+        if (string.IsNullOrWhiteSpace(_form.Name)) { _error = "Informe o nome da conta."; return; }
+        if (!TryMoney(_form.CreditLimit, out var creditLimit)) { _error = "Limite inválido."; return; }
+        if (!TryMoney(_form.OverdraftLimit, out var overdraftLimit)) { _error = "Limite do LIS inválido."; return; }
+        if (!TryMoney(_form.OverdraftRate, out var rate)) { _error = "Juros do LIS inválido."; return; }
+        if (!ValidDay(_form.ClosingDay) || !ValidDay(_form.DueDay)) { _error = "Dias devem ficar entre 1 e 31."; return; }
+
+        var card = _form.Kind == AccountKind.CreditCard;
+        var bank = _form.Kind == AccountKind.BankAccount;
+        Store.SaveAccount(new Account
+        {
+            Name = _form.Name.Trim(),
+            Kind = _form.Kind,
+            CreditLimit = card ? creditLimit : null,
+            ClosingDay = card ? _form.ClosingDay : null,
+            DueDay = card ? _form.DueDay : null,
+            OverdraftLimit = bank ? overdraftLimit : null,
+            OverdraftFreeDays = bank ? _form.OverdraftFreeDays : null,
+            OverdraftMonthlyRatePercent = bank ? rate : null,
+        });
+
+        Cancel();
+    }
+
+    private void Edit(Account account)
+    {
+        _editing = true;
+        _error = null;
+        _form = new Form
+        {
+            Name = account.Name,
+            Kind = account.Kind,
+            CreditLimit = account.CreditLimit?.ToString("N2", Br) ?? "",
+            ClosingDay = account.ClosingDay,
+            DueDay = account.DueDay,
+            OverdraftLimit = account.OverdraftLimit?.ToString("N2", Br) ?? "",
+            OverdraftFreeDays = account.OverdraftFreeDays,
+            OverdraftRate = account.OverdraftMonthlyRatePercent?.ToString("N2", Br) ?? "",
+        };
+    }
+
+    private void Cancel()
+    {
+        _editing = false;
+        _form = new Form();
+        Reload();
+    }
+
+    private void Delete(string name)
+    {
+        Store.DeleteAccount(name);
+        Reload();
+    }
+
+    private static string KindLabel(AccountKind kind) => kind switch
+    {
+        AccountKind.BankAccount => "Conta bancária",
+        AccountKind.CreditCard => "Cartão de crédito",
+        AccountKind.Cash => "Dinheiro",
+        _ => "Outro",
+    };
+
+    private static string Details(Account a) => a.Kind switch
+    {
+        AccountKind.CreditCard => string.Join(" · ", new[]
+        {
+            a.CreditLimit is { } l ? $"limite R$ {l.ToString("N2", Br)}" : null,
+            a.ClosingDay is { } c ? $"fecha dia {c}" : null,
+            a.DueDay is { } d ? $"vence dia {d}" : null,
+        }.Where(x => x is not null)),
+        AccountKind.BankAccount => string.Join(" · ", new[]
+        {
+            a.OverdraftLimit is { } l ? $"LIS R$ {l.ToString("N2", Br)}" : null,
+            a.OverdraftFreeDays is { } f ? $"{f} dias sem juros" : null,
+            a.OverdraftMonthlyRatePercent is { } r ? $"{r.ToString("N2", Br)}% ao mês" : null,
+        }.Where(x => x is not null)),
+        _ => "",
+    };
+}
