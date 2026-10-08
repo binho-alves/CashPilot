@@ -120,4 +120,61 @@ public class StatementTextTests
         Assert.Equal(0, again.Inserted);
         Assert.Equal(3, store.GetAll().Count); // two identical lines are kept as two entries
     }
+
+    // A card-app list where the description wraps and the installment sits on the second line.
+    [Theory]
+    [InlineData("24 SET Mp *Cobranca R$ 113,90\n15 SET Amazon BR VI - NuPay - R$ 96,33\nParcela 2/3")]
+    [InlineData("24 SET Mp *Cobranca R$ 113,90\n15 SET Amazon BR VI - NuPay -\nParcela 2/3 R$ 96,33")]
+    [InlineData("24 SET Mp *Cobranca R$ 113,90\n15 SET Amazon BR VI - NuPay -\nParcela 2/3\nR$ 96,33")]
+    public void EntriesSplitOverSeveralLinesAreJoined(string text)
+    {
+        using var store = new CashPilotStore(":memory:");
+
+        var all = Import(store, text, "Cartão Nu");
+
+        Assert.Equal(2, all.Count);
+        var cobranca = all.Single(t => t.RawDescription == "Mp *Cobranca");
+        Assert.Equal(new DateOnly(2026, 9, 24), cobranca.Date);
+        Assert.Equal(-113.90m, cobranca.Amount);
+        var amazon = all.Single(t => t.RawDescription.StartsWith("Amazon"));
+        Assert.Equal("Amazon BR VI - NuPay PARC 02/03", amazon.RawDescription);
+        Assert.Equal(new DateOnly(2026, 9, 15), amazon.Date);
+        Assert.Equal(-96.33m, amazon.Amount);
+        Assert.Equal((2, 3), (amazon.InstallmentNumber, amazon.InstallmentCount));
+    }
+
+    [Fact]
+    public void AnEntryThatNeverGetsAnAmountIsRejected()
+    {
+        var converted = StatementText.ToGastosCsv("15 SET Loja Sem Valor\n16 SET Loja Alfa 10,00", "Cartão A", Today);
+
+        Assert.Equal(1, converted.Entries);
+        Assert.Single(converted.Rejected, r => r.Line == 1);
+    }
+
+    [Fact]
+    public void OcrOrderWithTheDescriptionAboveTheDateAndAmountLineIsJoined()
+    {
+        // What Tesseract returned for a real card-app screenshot.
+        const string text = "24 SET Mp *Cobranca R$ 113,90\n\nAmazon BR VI - NuPay -\n15 SET R$ 96,33\nParcela 2/3";
+        using var store = new CashPilotStore(":memory:");
+
+        var all = Import(store, text, "Cartão Nu");
+
+        Assert.Equal(2, all.Count);
+        var amazon = all.Single(t => t.RawDescription.StartsWith("Amazon"));
+        Assert.Equal("Amazon BR VI - NuPay PARC 02/03", amazon.RawDescription);
+        Assert.Equal(new DateOnly(2026, 9, 15), amazon.Date);
+        Assert.Equal(-96.33m, amazon.Amount);
+        Assert.Equal((2, 3), (amazon.InstallmentNumber, amazon.InstallmentCount));
+    }
+
+    [Fact]
+    public void ADateAndAmountWithNoDescriptionAboveIsRejected()
+    {
+        var converted = StatementText.ToGastosCsv("15 SET R$ 96,33", "Cartão A", Today);
+
+        Assert.Equal(0, converted.Entries);
+        Assert.Single(converted.Rejected);
+    }
 }

@@ -30,6 +30,40 @@ public static partial class StatementText
         var entries = new List<(DateOnly Date, string Description, decimal Amount)>();
         DateOnly? current = null;
 
+        // An entry the app (or the OCR) split over several lines: date and description first, installment and
+        // amount on the lines that follow.
+        (DateOnly Date, string Description, int Line)? pending = null;
+
+        // A text line with no date and no amount, kept in case the next line is "date + amount" without a description
+        // (what OCR makes of a row whose description wraps above the date).
+        (string Text, int Line)? orphan = null;
+
+        void DropOrphan()
+        {
+            if (orphan is { } o)
+                rejected.Add(new RejectedRow(o.Line, $"Could not read '{o.Text}' (expected a description and an amount like 19,56)."));
+            orphan = null;
+        }
+
+        void DropPending()
+        {
+            if (pending is { } p) rejected.Add(new RejectedRow(p.Line, $"No amount found for '{p.Description}'."));
+            pending = null;
+        }
+
+        void Add(DateOnly date, string description, Match amountMatch, int number)
+        {
+            var amount = decimal.Parse(amountMatch.Groups["num"].Value.Replace(".", "").Replace(',', '.'), CultureInfo.InvariantCulture);
+            if (amountMatch.Groups["neg"].Success) amount = -amount;
+            if (!positiveAreExpenses) amount = -amount;
+            if (amount == 0)
+            {
+                rejected.Add(new RejectedRow(number, $"Zero amount in '{description}'."));
+                return;
+            }
+            entries.Add((date, TrimDash(description), amount));
+        }
+
         var lines = text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
         for (var i = 0; i < lines.Length; i++)
         {
@@ -37,9 +71,29 @@ public static partial class StatementText
             var line = lines[i].Replace('\u00A0', ' ').Trim();
             if (line.Length == 0 || line.StartsWith('#')) continue;
 
+            var dateAmount = DateAmountLineRegex().Match(line);
+            if (dateAmount.Success)
+            {
+                DropPending();
+                if (orphan is { } held && TryDate(dateAmount, today, out var rowDate))
+                {
+                    current = rowDate;
+                    Add(rowDate, held.Text, dateAmount, number);
+                    orphan = null;
+                }
+                else
+                {
+                    DropOrphan();
+                    rejected.Add(new RejectedRow(number, $"Could not read '{line}' (a date and an amount with no description above it)."));
+                }
+                continue;
+            }
+
             var dateOnly = DateOnlyLineRegex().Match(line);
             if (dateOnly.Success)
             {
+                DropPending();
+                DropOrphan();
                 if (TryDate(dateOnly, today, out var parsedDate)) current = parsedDate;
                 else rejected.Add(new RejectedRow(number, $"Invalid date '{line}'."));
                 continue;
@@ -48,25 +102,71 @@ public static partial class StatementText
             var installment = InstallmentLineRegex().Match(line);
             if (installment.Success)
             {
+                var n = int.Parse(installment.Groups[1].Value, CultureInfo.InvariantCulture);
+                var c = int.Parse(installment.Groups[2].Value, CultureInfo.InvariantCulture);
+                var suffix = $" PARC {n:00}/{c:00}";
+
+                if (pending is { } open)
+                {
+                    var description = TrimDash(open.Description) + suffix;
+                    if (installment.Groups["num"].Success)
+                    {
+                        Add(open.Date, description, installment, number);
+                        pending = null;
+                    }
+                    else pending = (open.Date, description, open.Line);
+                    continue;
+                }
+
                 if (entries.Count == 0)
                 {
                     rejected.Add(new RejectedRow(number, "Installment line without an entry above it."));
                     continue;
                 }
-                var last = entries[^1];
-                var n = int.Parse(installment.Groups[1].Value, CultureInfo.InvariantCulture);
-                var c = int.Parse(installment.Groups[2].Value, CultureInfo.InvariantCulture);
-                entries[^1] = last with { Description = $"{last.Description} PARC {n:00}/{c:00}" };
+                entries[^1] = entries[^1] with { Description = entries[^1].Description + suffix };
+                continue;
+            }
+
+            // Only an amount: closes the entry that is waiting for it (amount printed on its own line).
+            var amountOnly = AmountOnlyRegex().Match(line);
+            if (amountOnly.Success)
+            {
+                if (pending is { } waiting)
+                {
+                    Add(waiting.Date, waiting.Description, amountOnly, number);
+                    pending = null;
+                }
+                else rejected.Add(new RejectedRow(number, $"Could not read '{line}' (an amount with no description above it)."));
                 continue;
             }
 
             var entry = EntryRegex().Match(line);
             if (!entry.Success)
             {
-                rejected.Add(new RejectedRow(number, $"Could not read '{line}' (expected a description and an amount like 19,56)."));
+                // A line with a date but no amount starts an entry that continues below; a plain line
+                // continues the one that is open; anything else is not understood.
+                var started = DatedTextRegex().Match(line);
+                if (started.Success && TryDate(started, today, out var startDate))
+                {
+                    DropPending();
+                    DropOrphan();
+                    current = startDate;
+                    pending = (startDate, started.Groups["desc"].Value.Trim(), number);
+                }
+                else if (pending is { } open)
+                {
+                    pending = (open.Date, open.Description + " " + line, open.Line);
+                }
+                else
+                {
+                    DropOrphan();
+                    orphan = (line, number);
+                }
                 continue;
             }
 
+            DropPending();
+            DropOrphan();
             DateOnly date;
             if (entry.Groups["day"].Success)
             {
@@ -84,17 +184,11 @@ public static partial class StatementText
                 continue;
             }
 
-            var amount = decimal.Parse(entry.Groups["num"].Value.Replace(".", "").Replace(',', '.'), CultureInfo.InvariantCulture);
-            if (entry.Groups["neg"].Success) amount = -amount;
-            if (!positiveAreExpenses) amount = -amount;
-            if (amount == 0)
-            {
-                rejected.Add(new RejectedRow(number, $"Zero amount in '{line}'."));
-                continue;
-            }
-
-            entries.Add((date, entry.Groups["desc"].Value.Trim(), amount));
+            Add(date, entry.Groups["desc"].Value.Trim(), entry, number);
         }
+        DropPending();
+        DropOrphan();
+        rejected.Sort((a, b) => a.Line.CompareTo(b.Line));
 
         var csv = new StringBuilder("Dia;Categoria;Ítem;Conta;Valor;Obs\n");
         foreach (var (date, description, amount) in entries)
@@ -106,6 +200,9 @@ public static partial class StatementText
         }
         return new StatementTextResult(csv.ToString(), entries.Count, rejected);
     }
+
+    /// <summary>"Amazon BR VI - NuPay -" (the dash that wraps to the next line) becomes "Amazon BR VI - NuPay".</summary>
+    private static string TrimDash(string description) => description.Trim().TrimEnd('-', '–').TrimEnd();
 
     private static string Quote(string value) => "\"" + value.Replace("\"", "\"\"") + "\"";
 
@@ -156,11 +253,27 @@ public static partial class StatementText
     [GeneratedRegex("^" + DatePart + "$", RegexOptions.CultureInvariant)]
     private static partial Regex DateOnlyLineRegex();
 
-    [GeneratedRegex(@"^Parcela\s+(\d{1,2})\s+de\s+(\d{1,2})$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    // A minus sign counts only when glued to the amount ("-30,00", "-R$ 30,00"): a dash with a space after it
+    // is punctuation ("Amazon BR VI - NuPay - R$ 96,33").
+    private const string Amount =
+        @"(?:(?<neg>-)(?=R|\d))?(?:R[$S]\s*)?(?:(?<neg>-)(?=\d))?(?<num>\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2})";
+
+    // "Parcela 1 de 3" or "Parcela 2/3", optionally followed by the amount when the line also carries it.
+    [GeneratedRegex(@"^Parcela\s+(\d{1,2})\s*(?:de|/)\s*(\d{1,2})(?:\s+" + Amount + ")?$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex InstallmentLineRegex();
 
+    [GeneratedRegex("^" + Amount + "$", RegexOptions.CultureInvariant)]
+    private static partial Regex AmountOnlyRegex();
+
+    // "15 SET R$ 96,33": date and amount, the description is on the line above.
+    [GeneratedRegex("^" + DatePart + @"\s+" + Amount + "$", RegexOptions.CultureInvariant)]
+    private static partial Regex DateAmountLineRegex();
+
+    [GeneratedRegex("^" + DatePart + @"\s+(?<desc>.+)$", RegexOptions.CultureInvariant)]
+    private static partial Regex DatedTextRegex();
+
     [GeneratedRegex(
-        @"^(?:" + DatePart + @"\s+)?(?<desc>.+?)\s+(?<neg>-)?\s*(?:R\$\s*)?(?:(?<neg>-)\s*)?(?<num>\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2})$",
+        @"^(?:" + DatePart + @"\s+)?(?<desc>.+?)\s+(?:(?<neg>-)(?=R|\d))?(?:R\$\s*)?(?:(?<neg>-)(?=\d))?(?<num>\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2})$",
         RegexOptions.CultureInvariant)]
     private static partial Regex EntryRegex();
 }
