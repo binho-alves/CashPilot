@@ -1,0 +1,12 @@
+bin/
+obj/
+.vs/
+.idea/
+*.user
+*.suo
+TestResults/
+*.db
+*.db-shm
+*.db-wal
+# Personal data: nunca versionar extratos/planilhas reais
+/data/
