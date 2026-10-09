@@ -13,6 +13,11 @@ public static class CardInterest
     /// <summary>Days the revolving credit lasts: after the next due date the balance becomes a bill installment plan.</summary>
     public const int RevolvingMaxDays = 30;
 
+    /// <summary>One-off penalty on the unpaid balance of a bill paid late (printed identically on the Itaú, Bradesco, BrasilCard and Digio bills).</summary>
+    public const decimal LateFeePercent = 2m;
+    /// <summary>Juros de mora, simple, percent per month, from the due date.</summary>
+    public const decimal LateInterestMonthlyPercent = 1m;
+
     public static decimal Iof(decimal amount, int days) =>
         Round(amount * (IofFixedPercent + IofDailyPercent * Math.Min(Math.Max(days, 0), IofMaxDays)) / 100m);
 
@@ -37,6 +42,20 @@ public static class CardInterest
         if (amount <= 0 || days <= 0) return 0m;
         var rate = days > RevolvingMaxDays && installmentMonthlyPercent is { } installment ? installment : revolvingMonthlyPercent;
         var total = Interest(amount, days, rate) + Iof(amount, days);
+        return Math.Min(total, amount);
+    }
+
+    /// <summary>
+    /// Cost of paying <paramref name="amount"/> of a bill <paramref name="daysLate"/> days after the due date, when nothing
+    /// (or less than the minimum) was paid: the contract interest at the card's rate, juros de mora (1% a.m.), the 2% multa and
+    /// the IOF, all counted from the due date, never more than the amount itself.
+    /// </summary>
+    public static decimal LateCost(decimal amount, int daysLate, decimal revolvingMonthlyPercent)
+    {
+        if (amount <= 0 || daysLate <= 0) return 0m;
+        var fee = Round(amount * LateFeePercent / 100m);
+        var mora = Round(amount * LateInterestMonthlyPercent / 100m * daysLate / 30m);
+        var total = fee + mora + Interest(amount, daysLate, revolvingMonthlyPercent) + Iof(amount, daysLate);
         return Math.Min(total, amount);
     }
 

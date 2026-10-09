@@ -46,6 +46,21 @@ public class CardInterestTests
     }
 
     [Fact]
+    public void LateBillAddsFeeAndMoraOnTopOfTheRevolving()
+    {
+        // 1000 for 30 days late at 17%: 20 multa + 10 mora + 170 interest + 6.26 IOF
+        Assert.Equal(206.26m, CardInterest.LateCost(1000m, 30, 17m));
+        Assert.True(CardInterest.LateCost(1000m, 30, 17m) > CardInterest.CarryCost(1000m, 30, 17m));
+    }
+
+    [Fact]
+    public void LateCostIsCappedAndZeroWhenNotLate()
+    {
+        Assert.Equal(100m, CardInterest.LateCost(100m, 365, 20m));
+        Assert.Equal(0m, CardInterest.LateCost(1000m, 0, 17m));
+    }
+
+    [Fact]
     public void NothingToCarryCostsNothing()
     {
         Assert.Equal(0m, CardInterest.CarryCost(0m, 30, 17m));
@@ -87,6 +102,7 @@ public class CardInterestTests
 
         var revolving = options.Where(o => o.Kind == FundingKind.CardRevolving).ToList();
         Assert.Equal(2, revolving.Count);
+        Assert.Equal(2, options.Count(o => o.Kind == FundingKind.LateCardBill));
         Assert.Equal(CardInterest.CarryCost(1000m, 30, 14.9m), revolving.Min(o => o.Cost));
         Assert.DoesNotContain(revolving, o => o.Name.Contains("Cartão C"));
     }

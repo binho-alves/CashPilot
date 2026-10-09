@@ -9,6 +9,7 @@ public enum FundingKind
     CardCashOut = 2,
     LateBoleto = 3,
     CardRevolving = 4,
+    LateCardBill = 5,
 }
 
 /// <summary>
@@ -131,6 +132,16 @@ public static class CostSimulator
                 detail,
                 amount,
                 cost,
+                true,
+                null));
+
+            // Paying nothing at all (below the minimum) is worse than the revolving: multa and mora come on top.
+            options.Add(new FundingOption(
+                FundingKind.LateCardBill,
+                $"Atrasar a fatura {card.Name}",
+                $"não paga R$ {amount:N2} da fatura e passa do mínimo: juros {revolving:0.##}% ao mês + mora {CardInterest.LateInterestMonthlyPercent:0.##}% ao mês + multa {CardInterest.LateFeePercent:0.##}% + IOF, contados do vencimento (além do cartão bloqueável e do nome negativável)",
+                amount,
+                CardInterest.LateCost(amount, days, revolving),
                 true,
                 null));
         }
