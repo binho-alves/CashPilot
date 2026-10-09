@@ -1,0 +1,69 @@
+@page "/backup"
+@using CashPilot.Infrastructure.Backup
+@inject DatabaseLocation Location
+
+<PageTitle>Backup — CashPilot</PageTitle>
+
+<h1>Backup e exportação</h1>
+
+<section class="card-box wide">
+    <h2>Baixar agora</h2>
+    <p class="muted">
+        Seus dados ficam em um único arquivo no seu computador. Guarde uma cópia em outro lugar (outro disco, nuvem pessoal):
+        estes arquivos têm todos os seus lançamentos, então não os envie a ninguém nem os publique.
+    </p>
+    <p><a href="/backup/banco" download data-enhance-nav="false"><strong>Baixar cópia do banco de dados</strong></a>
+        <span class="muted"> (arquivo .db, serve para restaurar tudo)</span></p>
+    <p><a href="/backup/lancamentos.csv" download data-enhance-nav="false"><strong>Baixar lançamentos em CSV</strong></a>
+        <span class="muted"> (para abrir no Excel; é uma cópia para leitura, não serve para restaurar)</span></p>
+</section>
+
+<section class="card-box wide">
+    <h2>Cópias automáticas</h2>
+    <p class="muted">
+        Toda vez que o CashPilot abre, ele guarda uma cópia do dia na pasta <code>data\backups</code> e mantém as 14 mais recentes.
+        Elas ficam no mesmo computador: não substituem uma cópia em outro lugar.
+    </p>
+    @if (_files.Count == 0)
+    {
+        <p class="muted">Ainda não há cópias automáticas. A primeira será feita na próxima vez que o app abrir.</p>
+    }
+    else
+    {
+        <table class="grid">
+            <thead>
+                <tr><th>Arquivo</th><th>Feita em</th><th class="num">Tamanho</th></tr>
+            </thead>
+            <tbody>
+                @foreach (var file in _files)
+                {
+                    <tr>
+                        <td>@file.Name</td>
+                        <td>@file.Modified.ToString("dd/MM/yyyy HH:mm")</td>
+                        <td class="num">@Size(file.Bytes)</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+</section>
+
+<section class="card-box wide">
+    <h2>Como restaurar</h2>
+    <ol>
+        <li>Feche o CashPilot (no terminal, Ctrl+C).</li>
+        <li>Guarde o arquivo atual <code>data\cashpilot.db</code> em outro lugar, por segurança.</li>
+        <li>Copie a cópia que você quer usar para <code>data\cashpilot.db</code>, com esse nome.</li>
+        <li>Abra o CashPilot de novo.</li>
+    </ol>
+</section>
+
+@code {
+    private IReadOnlyList<BackupFile> _files = Array.Empty<BackupFile>();
+
+    protected override void OnInitialized() => _files = DatabaseBackups.List(Location.Path);
+
+    private static string Size(long bytes) => bytes >= 1024 * 1024
+        ? $"{bytes / 1024d / 1024d:N1} MB".Replace('.', ',')
+        : $"{Math.Max(1, bytes / 1024):N0} KB";
+}

@@ -127,6 +127,38 @@ public sealed class Classifier
         return ClassificationResult.Unknown;
     }
 
+    /// <summary>
+    /// A guess for a description <see cref="Classify"/> is not sure about: the most similar known description, even
+    /// below <see cref="SimilarityThreshold"/>, as long as it reaches <paramref name="minScore"/>. Meant to pre-fill a
+    /// field the user still confirms, never to classify on its own. Nothing is suggested for an ambiguous description.
+    /// </summary>
+    public ClassificationResult Suggest(string description, double minScore = 0.45)
+    {
+        var sure = Classify(description);
+        if (sure.IsClassified) return sure;
+
+        var normalized = DescriptionNormalizer.Normalize(description);
+        if (normalized.Length == 0 || _ambiguous.Contains(normalized)) return ClassificationResult.Unknown;
+
+        var target = Trigrams(normalized);
+        string? best = null;
+        var bestScore = 0.0;
+        foreach (var (key, trigrams) in _trigrams)
+        {
+            if (_ambiguous.Contains(key)) continue;
+            var score = Jaccard(target, trigrams);
+            if (score > bestScore)
+            {
+                bestScore = score;
+                best = key;
+            }
+        }
+
+        return best is not null && bestScore >= minScore
+            ? new ClassificationResult(_exact[best], bestScore, ClassificationSource.Similarity)
+            : ClassificationResult.Unknown;
+    }
+
     private static HashSet<string> Trigrams(string text)
     {
         var padded = "  " + text + " ";

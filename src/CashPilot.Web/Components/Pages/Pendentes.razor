@@ -19,6 +19,10 @@
 }
 else
 {
+    <div class="filters">
+        <button @onclick="FillSuggestions" title="Preenche categoria e item das linhas vazias com a descrição parecida que o app já conhece. Nada é salvo ainda.">Preencher sugestões</button>
+        <button class="primary" @onclick="SaveFilled" title="Salva todas as linhas que estão com categoria preenchida">Salvar preenchidas (@_rows.Count(r => r.Category.Trim().Length > 0))</button>
+    </div>
     <p class="muted">
         @_rows.Count descrições, @_rows.Sum(r => r.Entries.Count) lançamentos.
         Classificar uma descrição ensina o sistema: as próximas importações já entram classificadas.
@@ -44,7 +48,15 @@ else
             var listId = "dl-items-" + i;
             <tbody class="group" @key="row.Normalized">
                 <tr>
-                    <td>@row.Description</td>
+                    <td>
+                        @row.Description
+                        @if (row.Suggestion is { } suggestion && row.Category.Trim().Length == 0)
+                        {
+                            <br />
+                            <span class="muted">sugestão: @suggestion.Category@(suggestion.Item.Length > 0 ? " / " + suggestion.Item : "")</span>
+                            <button @onclick="() => UseSuggestion(row)">Usar</button>
+                        }
+                    </td>
                     <td class="muted">@row.When</td>
                     <td class="num">@row.Entries.Count</td>
                     <td class="num">@row.Total.ToString("N2", Br)</td>
@@ -128,6 +140,7 @@ else
         public string Item { get; set; } = "";
         public string? Error { get; set; }
         public bool Open { get; set; }
+        public Classification? Suggestion { get; init; }
     }
 
     private List<PendingRow> _rows = new();
@@ -142,10 +155,12 @@ else
         var open = _rows.Where(r => r.Open).Select(r => r.Normalized).ToHashSet();
         _known = Store.GetKnownClassifications();
         _categories = _known.Select(k => k.Category).Distinct().OrderBy(c => c).ToList();
+        var classifier = Store.BuildClassifier();
         _rows = Store.GetPending()
             .GroupBy(t => t.NormalizedDescription)
             .Select(g => new PendingRow
             {
+                Suggestion = classifier.Suggest(g.First().RawDescription).Classification,
                 Normalized = g.Key,
                 Description = g.First().RawDescription,
                 Entries = g.OrderByDescending(t => t.Date).ToList(),
@@ -169,6 +184,42 @@ else
 
     private IEnumerable<string> ItemsFor(string category) =>
         _known.Where(k => k.Category == category && k.Item.Length > 0).Select(k => k.Item).Distinct().OrderBy(i => i);
+
+    private void UseSuggestion(PendingRow row)
+    {
+        if (row.Suggestion is not { } s) return;
+        row.Category = s.Category;
+        row.Item = s.Item;
+    }
+
+    private void FillSuggestions()
+    {
+        var filled = 0;
+        foreach (var row in _rows.Where(r => r.Suggestion is not null && r.Category.Trim().Length == 0))
+        {
+            UseSuggestion(row);
+            filled++;
+        }
+        Toasts.Success(filled == 0
+            ? "Nenhuma sugestão nova. Classifique as outras à mão."
+            : $"{filled} sugestão(ões) preenchida(s). Confira e clique em \"Salvar preenchidas\".");
+    }
+
+    private void SaveFilled()
+    {
+        var rows = _rows.Where(r => r.Category.Trim().Length > 0).ToList();
+        if (rows.Count == 0)
+        {
+            Toasts.Success("Nenhuma linha com categoria preenchida.");
+            return;
+        }
+
+        var entries = 0;
+        foreach (var row in rows)
+            entries += Store.Classify(row.Description, new Classification(row.Category.Trim(), row.Item.Trim()));
+        Toasts.Success($"{rows.Count} descrição(ões) salva(s), {entries} lançamento(s) classificado(s).");
+        Reload();
+    }
 
     private void Save(PendingRow row)
     {

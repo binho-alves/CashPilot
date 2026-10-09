@@ -629,6 +629,9 @@ public sealed class CashPilotStore : IDisposable
         return classifier;
     }
 
+    /// <summary>Writes a consistent copy of the whole database to <paramref name="destinationPath"/> (see DatabaseBackups).</summary>
+    public void BackupTo(string destinationPath) => Backup.DatabaseBackups.Copy(_connection, destinationPath);
+
     public void Dispose()
     {
         _transaction?.Dispose();

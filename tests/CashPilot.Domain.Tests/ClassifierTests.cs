@@ -61,4 +61,40 @@ public class ClassifierTests
         Assert.Equal(ClassificationSource.Contains, result.Source);
         Assert.Equal(Delivery, result.Classification);
     }
+
+    [Fact]
+    public void SuggestOffersTheClosestKnownDescriptionEvenBelowTheThreshold()
+    {
+        var classifier = new Classifier();
+        classifier.Learn("Farmacia Central Centro", Pharmacy);
+
+        Assert.False(classifier.Classify("Farmacia Central Norte").IsClassified);   // not sure enough to classify
+
+        var suggestion = classifier.Suggest("Farmacia Central Norte");
+
+        Assert.True(suggestion.IsClassified);
+        Assert.Equal(Pharmacy, suggestion.Classification);
+        Assert.True(suggestion.Confidence < classifier.SimilarityThreshold);
+    }
+
+    [Fact]
+    public void SuggestReturnsTheSureAnswerWhenThereIsOne()
+    {
+        var classifier = new Classifier();
+        classifier.Learn("Cizi Mercado Express L", Groceries);
+
+        Assert.Equal(ClassificationSource.Exact, classifier.Suggest("Cizi Mercado Express L").Source);
+    }
+
+    [Fact]
+    public void SuggestSaysNothingForUnrelatedOrAmbiguousDescriptions()
+    {
+        var classifier = new Classifier();
+        classifier.Learn("Farmacia Central Centro", Pharmacy);
+        Assert.False(classifier.Suggest("Oficina Mecanica Beta").IsClassified);
+
+        classifier.Observe("PAGTO ELETRON COBRANCA", Groceries);
+        classifier.Observe("PAGTO ELETRON COBRANCA", Delivery);   // same description, two classifications
+        Assert.False(classifier.Suggest("PAGTO ELETRON COBRANCA").IsClassified);
+    }
 }
