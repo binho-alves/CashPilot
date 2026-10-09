@@ -12,6 +12,8 @@ public enum UpcomingKind
     RecurringExpense = 4,
     /// <summary>Forecast only: a monthly income repeated from the history. <see cref="UpcomingPayment.Amount"/> is the inflow.</summary>
     RecurringIncome = 5,
+    /// <summary>Forecast only: money still to come from a health-plan reimbursement claim. The amount is the inflow.</summary>
+    ExpectedReimbursement = 6,
 }
 
 /// <summary>

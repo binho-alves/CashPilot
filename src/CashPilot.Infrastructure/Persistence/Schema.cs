@@ -95,6 +95,25 @@ internal static class Schema
             limit_cents INTEGER NOT NULL
         );
         """,
+
+        // v8: health-plan reimbursement claims on expenses, and the Pix payments linked to them (money in cents).
+        // A claim is identified by its expense; a Pix can pay several claims and a claim can be paid by several Pix.
+        """
+        CREATE TABLE reimbursement_claims (
+            transaction_id TEXT    PRIMARY KEY,
+            requested_on   TEXT    NOT NULL,
+            expected_on    TEXT    NOT NULL,
+            status         INTEGER NOT NULL,
+            note           TEXT    NULL
+        );
+        CREATE TABLE reimbursement_payments (
+            claim_id     TEXT    NOT NULL,
+            pix_id       TEXT    NOT NULL,
+            amount_cents INTEGER NOT NULL,
+            PRIMARY KEY (claim_id, pix_id)
+        );
+        CREATE INDEX ix_reimbursement_payments_pix ON reimbursement_payments (pix_id);
+        """,
     ];
 
     public static void Apply(SqliteConnection connection)

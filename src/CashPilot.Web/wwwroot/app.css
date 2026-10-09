@@ -84,3 +84,4 @@ tr.detail td { background: var(--bg); padding: 4px 12px 10px 28px; }
 button.link { background: none; border: none; color: var(--accent); padding: 6px 4px; text-decoration: underline; }
 .warn-text { color: var(--warn); }
 .pos { color: var(--accent); }
+.grid tr.selected { background: color-mix(in srgb, var(--accent) 14%, transparent); }

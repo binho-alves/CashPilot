@@ -10,8 +10,8 @@
 <p class="muted">
     Dia a dia, o que vence e como fica o saldo das contas bancárias se você pagar tudo na data.
     O saldo vem de <a href="pagar">Contas a pagar</a>.
-    Com a previsão ligada entram também o que se repete todo mês (aluguel, assinaturas, salário), as parcelas que ainda vão cair
-    e as faturas dos próximos meses. Isso é uma estimativa: parte do princípio de que os próximos meses se parecem com os últimos.
+    Com a previsão ligada entram também o que se repete todo mês (aluguel, assinaturas, salário), as parcelas que ainda vão cair,
+    as faturas dos próximos meses e os reembolsos do plano de saúde que ainda não chegaram (pelo valor pedido, que pode vir menor). Isso é uma estimativa: parte do princípio de que os próximos meses se parecem com os últimos.
 </p>
 
 <div class="filters">
@@ -26,6 +26,7 @@
     </label>
     <label class="check"><input type="checkbox" @bind="_forecast" /> Incluir previsão (fixos, parcelas, faturas futuras)</label>
     <label class="check"><input type="checkbox" @bind="_income" disabled="@(!_forecast)" /> Contar receitas fixas</label>
+    <label class="check"><input type="checkbox" @bind="_reimbursements" disabled="@(!_forecast)" /> Contar reembolsos pendentes</label>
 </div>
 
 @if (Summary.Days.Count > 0)
@@ -90,7 +91,7 @@
                     @foreach (var item in day.Items)
                     {
                         <div>
-                            @if (item.Kind == UpcomingKind.RecurringIncome) { <span class="pos">+ </span> }
+                            @if (CashForecast.IsInflow(item)) { <span class="pos">+ </span> }
                             @item.Description <span class="muted">(@Money(item.Amount)@Tag(item))</span>
                         </div>
                     }
@@ -114,16 +115,19 @@
     private int _horizon = 60;
     private bool _forecast = true;
     private bool _income = true;
+    private bool _reimbursements = true;
     private decimal _startBalance;
     private decimal _lisLimit;
     private IReadOnlyList<UpcomingPayment> _basic = Array.Empty<UpcomingPayment>();
     private IReadOnlyList<UpcomingPayment> _withForecast = Array.Empty<UpcomingPayment>();
-    private IReadOnlyList<UpcomingPayment> _withForecastNoIncome = Array.Empty<UpcomingPayment>();
     private List<string> _withoutBalance = new();
 
     private static DateOnly Today => DateOnly.FromDateTime(DateTime.Today);
 
-    private IReadOnlyList<UpcomingPayment> Items => !_forecast ? _basic : _income ? _withForecast : _withForecastNoIncome;
+    private IReadOnlyList<UpcomingPayment> Items => !_forecast
+        ? _basic
+        : _withForecast.Where(i => (_income || i.Kind != UpcomingKind.RecurringIncome)
+                                   && (_reimbursements || i.Kind != UpcomingKind.ExpectedReimbursement)).ToList();
 
     private List<UpcomingPayment> Overdue => Items.Where(i => i.Overdue).ToList();
 
@@ -142,12 +146,13 @@
         var settlements = Store.GetCardBillSettlements();
         var until = Today.AddDays(365);
         _basic = PaymentSchedule.Build(accounts, transactions, payables, Today, settlements);
-        _withForecast = CashForecast.Build(accounts, transactions, payables, Today, until, settlements);
-        _withForecastNoIncome = CashForecast.Build(accounts, transactions, payables, Today, until, settlements, includeIncome: false);
+        _withForecast = CashForecast.Build(accounts, transactions, payables, Today, until, settlements,
+            reimbursements: Store.GetReimbursementClaims());
     }
 
     private static string Tag(UpcomingPayment item) =>
         item.Kind is UpcomingKind.RecurringExpense or UpcomingKind.RecurringIncome ? ", previsto, repete todo mês" :
+        item.Kind == UpcomingKind.ExpectedReimbursement ? ", previsto, pode vir menor" :
         item.ProjectedPart > 0 && item.ProjectedPart >= item.Amount ? ", prevista" :
         item.ProjectedPart > 0 ? $", inclui {Money(item.ProjectedPart)} previstos" :
         "";

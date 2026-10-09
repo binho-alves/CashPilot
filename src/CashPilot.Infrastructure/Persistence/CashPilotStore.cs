@@ -2,6 +2,7 @@ using System.Globalization;
 using CashPilot.Domain.Accounts;
 using CashPilot.Domain.Descriptions;
 using CashPilot.Domain.Payments;
+using CashPilot.Domain.Reimbursements;
 using CashPilot.Domain.Transactions;
 using Microsoft.Data.Sqlite;
 
@@ -558,6 +559,183 @@ public sealed class CashPilotStore : IDisposable
     {
         using var command = CreateCommand("DELETE FROM budgets WHERE category = $category;");
         command.Parameters.AddWithValue("$category", category);
+        return command.ExecuteNonQuery() > 0;
+    }
+
+    // ---- Health-plan reimbursements -------------------------------------------------------------------------
+
+    private static string IsoDate(DateOnly date) => date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+
+    /// <summary>Claims whose expense still exists, oldest request first, with the Pix payments linked to them.</summary>
+    public IReadOnlyList<ReimbursementClaim> GetReimbursementClaims()
+    {
+        var transactions = GetAll().ToDictionary(t => t.Id);
+
+        var payments = new List<ReimbursementPayment>();
+        using (var command = CreateCommand("SELECT claim_id, pix_id, amount_cents FROM reimbursement_payments;"))
+        using (var reader = command.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                var pix = Guid.Parse(reader.GetString(1));
+                if (transactions.ContainsKey(pix)) // a deleted Pix no longer counts
+                    payments.Add(new ReimbursementPayment(Guid.Parse(reader.GetString(0)), pix, FromCents(reader.GetInt64(2))));
+            }
+        }
+
+        var result = new List<ReimbursementClaim>();
+        using (var command = CreateCommand("SELECT transaction_id, requested_on, expected_on, status, note FROM reimbursement_claims;"))
+        using (var reader = command.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                var id = Guid.Parse(reader.GetString(0));
+                if (!transactions.TryGetValue(id, out var expense)) continue;
+                result.Add(new ReimbursementClaim(
+                    expense,
+                    DateOnly.ParseExact(reader.GetString(1), "yyyy-MM-dd", CultureInfo.InvariantCulture),
+                    DateOnly.ParseExact(reader.GetString(2), "yyyy-MM-dd", CultureInfo.InvariantCulture),
+                    (ClaimStatus)reader.GetInt32(3),
+                    reader.IsDBNull(4) ? null : reader.GetString(4),
+                    payments.Where(p => p.ClaimId == id).ToList()));
+            }
+        }
+
+        return result.OrderBy(c => c.RequestedOn).ThenBy(c => c.Expense.Date).ToList();
+    }
+
+    /// <summary>
+    /// Registers that the expense was sent to the plan for reimbursement. The payment is expected
+    /// <see cref="ReimbursementRules.ExpectedDays"/> days after <paramref name="requestedOn"/>.
+    /// Returns false when the expense already has a claim; throws when it is not an existing expense.
+    /// </summary>
+    public bool AddReimbursementClaim(Guid expenseId, DateOnly requestedOn)
+    {
+        using (var lookup = CreateCommand("SELECT amount_cents FROM transactions WHERE id = $id AND deleted = 0;"))
+        {
+            lookup.Parameters.AddWithValue("$id", expenseId.ToString());
+            if (lookup.ExecuteScalar() is not { } cents) throw new ArgumentException("Entry not found.", nameof(expenseId));
+            if (Convert.ToInt64(cents, CultureInfo.InvariantCulture) >= 0)
+                throw new ArgumentException("Only an expense can have a reimbursement claim.", nameof(expenseId));
+        }
+
+        using var command = CreateCommand("""
+            INSERT OR IGNORE INTO reimbursement_claims (transaction_id, requested_on, expected_on, status)
+            VALUES ($id, $requested, $expected, $status);
+            """);
+        command.Parameters.AddWithValue("$id", expenseId.ToString());
+        command.Parameters.AddWithValue("$requested", IsoDate(requestedOn));
+        command.Parameters.AddWithValue("$expected", IsoDate(requestedOn.AddDays(ReimbursementRules.ExpectedDays)));
+        command.Parameters.AddWithValue("$status", (int)ClaimStatus.Requested);
+        return command.ExecuteNonQuery() == 1;
+    }
+
+    /// <summary>The plan asked for more documents: the wait restarts, <see cref="ReimbursementRules.ExpectedDays"/> days from <paramref name="today"/>.</summary>
+    public bool RequestMoreDocuments(Guid claimId, DateOnly today, string? note = null)
+    {
+        using var command = CreateCommand("""
+            UPDATE reimbursement_claims
+            SET status = $status, expected_on = $expected, note = COALESCE($note, note)
+            WHERE transaction_id = $id;
+            """);
+        command.Parameters.AddWithValue("$status", (int)ClaimStatus.AwaitingDocuments);
+        command.Parameters.AddWithValue("$expected", IsoDate(today.AddDays(ReimbursementRules.ExpectedDays)));
+        command.Parameters.AddWithValue("$note", string.IsNullOrWhiteSpace(note) ? DBNull.Value : note.Trim());
+        command.Parameters.AddWithValue("$id", claimId.ToString());
+        return command.ExecuteNonQuery() > 0;
+    }
+
+    /// <summary>Gives up on what is missing (denied or paid in part): the difference becomes a final cost.</summary>
+    public bool CloseReimbursementClaim(Guid claimId) => SetClaimStatus(claimId, ClaimStatus.Closed);
+
+    public bool ReopenReimbursementClaim(Guid claimId) => SetClaimStatus(claimId, ClaimStatus.Requested);
+
+    private bool SetClaimStatus(Guid claimId, ClaimStatus status)
+    {
+        using var command = CreateCommand("UPDATE reimbursement_claims SET status = $status WHERE transaction_id = $id;");
+        command.Parameters.AddWithValue("$status", (int)status);
+        command.Parameters.AddWithValue("$id", claimId.ToString());
+        return command.ExecuteNonQuery() > 0;
+    }
+
+    /// <summary>Drops the claim and its links. The expense and the Pix entries stay.</summary>
+    public bool RemoveReimbursementClaim(Guid claimId)
+    {
+        var removed = false;
+        InTransaction(() =>
+        {
+            using (var payments = CreateCommand("DELETE FROM reimbursement_payments WHERE claim_id = $id;"))
+            {
+                payments.Parameters.AddWithValue("$id", claimId.ToString());
+                payments.ExecuteNonQuery();
+            }
+            using var claim = CreateCommand("DELETE FROM reimbursement_claims WHERE transaction_id = $id;");
+            claim.Parameters.AddWithValue("$id", claimId.ToString());
+            removed = claim.ExecuteNonQuery() > 0;
+        });
+        return removed;
+    }
+
+    /// <summary>
+    /// Links an incoming Pix to one or more claims, with the amount that pays each. Throws <see cref="ArgumentException"/>
+    /// when the entry is not an inflow, an amount is not positive, the amounts add up to more than the Pix has left,
+    /// or an amount is more than the claim still has to receive. A Pix without a category takes the category of the
+    /// claim it mostly pays, so the money back lowers that category in the month it arrives.
+    /// </summary>
+    public void LinkPix(Guid pixId, IReadOnlyList<Allocation> allocations)
+    {
+        if (allocations.Count == 0) throw new ArgumentException("Choose at least one claim.", nameof(allocations));
+        if (allocations.Any(a => a.Amount <= 0m)) throw new ArgumentException("Amounts must be positive.", nameof(allocations));
+        if (allocations.GroupBy(a => a.ClaimId).Any(g => g.Count() > 1))
+            throw new ArgumentException("A claim can appear only once.", nameof(allocations));
+
+        var pix = GetAll().FirstOrDefault(t => t.Id == pixId);
+        if (pix is null || pix.Amount <= 0m) throw new ArgumentException("The entry is not an inflow.", nameof(pixId));
+
+        var claims = GetReimbursementClaims().ToDictionary(c => c.Id);
+        var alreadyOnPix = claims.Values.SelectMany(c => c.Payments).Where(p => p.PixId == pixId).Sum(p => p.Amount);
+        if (alreadyOnPix + allocations.Sum(a => a.Amount) > pix.Amount)
+            throw new ArgumentException("The amounts add up to more than the Pix has left.", nameof(allocations));
+
+        foreach (var allocation in allocations)
+        {
+            if (!claims.TryGetValue(allocation.ClaimId, out var claim))
+                throw new ArgumentException("Claim not found.", nameof(allocations));
+            if (allocation.Amount > claim.Remaining)
+                throw new ArgumentException($"More than what is still due on \"{claim.Expense.RawDescription}\".", nameof(allocations));
+        }
+
+        InTransaction(() =>
+        {
+            foreach (var allocation in allocations)
+            {
+                using var command = CreateCommand("""
+                    INSERT INTO reimbursement_payments (claim_id, pix_id, amount_cents) VALUES ($claim, $pix, $cents)
+                    ON CONFLICT (claim_id, pix_id) DO UPDATE SET amount_cents = amount_cents + excluded.amount_cents;
+                    """);
+                command.Parameters.AddWithValue("$claim", allocation.ClaimId.ToString());
+                command.Parameters.AddWithValue("$pix", pixId.ToString());
+                command.Parameters.AddWithValue("$cents", ToCents(allocation.Amount));
+                command.ExecuteNonQuery();
+            }
+
+            if (pix.Category is null)
+            {
+                var main = allocations
+                    .OrderByDescending(a => a.Amount)
+                    .Select(a => claims[a.ClaimId].Expense)
+                    .FirstOrDefault(e => e.Category is not null);
+                if (main is not null) SetClassification(pixId, new Classification(main.Category!, main.Item ?? ""));
+            }
+        });
+    }
+
+    /// <summary>Undoes one link. The category given to the Pix stays.</summary>
+    public bool UnlinkPix(Guid claimId, Guid pixId)
+    {
+        using var command = CreateCommand("DELETE FROM reimbursement_payments WHERE claim_id = $claim AND pix_id = $pix;");
+        command.Parameters.AddWithValue("$claim", claimId.ToString());
+        command.Parameters.AddWithValue("$pix", pixId.ToString());
         return command.ExecuteNonQuery() > 0;
     }
 

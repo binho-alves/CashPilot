@@ -1,0 +1,406 @@
+@page "/reembolsos"
+@using CashPilot.Domain.Descriptions
+@using CashPilot.Domain.Reimbursements
+@using CashPilot.Domain.Transactions
+@inject CashPilotStore Store
+@inject ToastService Toasts
+
+<PageTitle>Reembolsos — CashPilot</PageTitle>
+
+<h1>Reembolsos do plano de saúde</h1>
+
+<p class="muted">
+    Você paga o prestador, pede o reembolso e o plano devolve por Pix o valor total ou parte dele, em geral em 30 dias.
+    O gasto continua lançado pelo valor pago. Quando o Pix chega, ligue-o aos pedidos que ele cobre (um Pix pode pagar vários):
+    ele abate a categoria no mês em que entra, e a diferença que o plano não devolveu é o custo real.
+</p>
+
+@if (_error is not null)
+{
+    <p class="error">@_error</p>
+}
+
+<div class="cards">
+    <div class="card">
+        <span class="muted">Aguardando reembolso</span>
+        <strong>@Money(_totals.Waiting)</strong>
+        <span class="muted">@_totals.OpenCount pedido(s) em aberto</span>
+    </div>
+    <div class="card @(_totals.LateCount > 0 ? "warn" : "")">
+        <span class="muted">Passaram do prazo</span>
+        <strong>@_totals.LateCount</strong>
+    </div>
+    <div class="card">
+        <span class="muted">Não devolvido (custo real)</span>
+        <strong>@Money(_totals.FinalDifference)</strong>
+        <span class="muted">em pedidos já encerrados</span>
+    </div>
+</div>
+
+<h2>Pedidos</h2>
+<label class="check"><input type="checkbox" @bind="_showClosed" /> Mostrar também os já recebidos e encerrados</label>
+
+<table class="grid">
+    <thead>
+        <tr>
+            <th>Gasto</th><th class="num">Pago</th><th>Pedido em</th><th>Previsto</th>
+            <th class="num">Recebido</th><th class="num">Falta</th><th>Situação</th><th></th>
+        </tr>
+    </thead>
+    <tbody>
+        @foreach (var claim in VisibleClaims)
+        {
+            <tr @key="claim.Id">
+                <td>@claim.Expense.Date.ToString("dd/MM/yyyy") — @claim.Expense.RawDescription
+                    <span class="muted">@claim.Expense.Account@(claim.Expense.Category is { } c ? " · " + c : "")</span>
+                    @foreach (var payment in claim.Payments)
+                    {
+                        <div class="muted">
+                            Pix de @PixLabel(payment.PixId): @Money(payment.Amount)
+                            <button class="link" @onclick="() => Unlink(claim.Id, payment.PixId)">desligar</button>
+                        </div>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(claim.Note)) { <div class="muted">Obs.: @claim.Note</div> }
+                </td>
+                <td class="num">@Money(claim.Paid)</td>
+                <td>@claim.RequestedOn.ToString("dd/MM/yyyy")</td>
+                <td>@(claim.IsOpen ? claim.ExpectedOn.ToString("dd/MM/yyyy") : "")</td>
+                <td class="num">@(claim.Received > 0 ? Money(claim.Received) : "")</td>
+                <td class="num @(claim.Difference > 0 && !claim.IsOpen ? "neg" : "")">@(claim.Difference > 0 ? Money(claim.Difference) : "")</td>
+                <td>@StatusText(claim)</td>
+                <td class="actions">
+                    @if (claim.IsOpen)
+                    {
+                        <button @onclick="() => MoreDocuments(claim.Id)">Pediram documentos</button>
+                        <button @onclick="() => Close(claim.Id)">Encerrar</button>
+                    }
+                    else if (!claim.Settled)
+                    {
+                        <button @onclick="() => Reopen(claim.Id)">Reabrir</button>
+                    }
+                    <button class="link" @onclick="() => Remove(claim.Id)">Remover pedido</button>
+                </td>
+            </tr>
+        }
+        @if (!VisibleClaims.Any())
+        {
+            <tr><td colspan="8" class="muted">Nenhum pedido em aberto. Marque um gasto em “Novo pedido” abaixo.</td></tr>
+        }
+    </tbody>
+</table>
+<p class="muted">
+    “Encerrar” serve quando o plano pagou menos (ou negou) e você não espera mais nada: o que faltou vira custo real.
+    “Pediram documentos” reinicia o prazo de 30 dias a partir de hoje.
+</p>
+
+<section class="card-box wide">
+    <h2>Ligar um Pix recebido</h2>
+    <p class="muted">Escolha o Pix do plano e marque os pedidos que ele pagou. Já sugiro a combinação que soma o valor do Pix.</p>
+    <div class="filters">
+        <label>Filtrar Pix <input @bind="_pixFilter" @bind:event="oninput" placeholder="parte da descrição" /></label>
+    </div>
+
+    <table class="grid">
+        <thead><tr><th>Data</th><th>Descrição</th><th class="num">Valor</th><th class="num">Ainda sem ligar</th><th></th></tr></thead>
+        <tbody>
+            @foreach (var pix in PixCandidates)
+            {
+                <tr class="@(_pixId == pix.Entry.Id ? "clickable selected" : "clickable")" @onclick="() => SelectPix(pix.Entry.Id)" @key="pix.Entry.Id">
+                    <td>@pix.Entry.Date.ToString("dd/MM/yyyy")</td>
+                    <td>@pix.Entry.RawDescription <span class="muted">@pix.Entry.Account</span></td>
+                    <td class="num">@Money(pix.Entry.Amount)</td>
+                    <td class="num">@Money(pix.Free)</td>
+                    <td>@(_pixId == pix.Entry.Id ? "▾" : "▸")</td>
+                </tr>
+            }
+            @if (!PixCandidates.Any())
+            {
+                <tr><td colspan="5" class="muted">Nenhum Pix recebido nos últimos 180 dias com valor ainda sem ligar.</td></tr>
+            }
+        </tbody>
+    </table>
+
+    @if (SelectedPix is { } selected)
+    {
+        <h3>Pix de @Money(selected.Free) para distribuir</h3>
+        @if (_openClaims.Count == 0)
+        {
+            <p class="muted">Não há pedidos em aberto.</p>
+        }
+        else
+        {
+            <table class="grid">
+                <thead><tr><th></th><th>Pedido</th><th>Pedido em</th><th class="num">Falta receber</th><th>Valor deste Pix</th></tr></thead>
+                <tbody>
+                    @foreach (var claim in _openClaims)
+                    {
+                        <tr @key="claim.Id">
+                            <td><input type="checkbox" checked="@_checked.Contains(claim.Id)" @onchange="e => ToggleClaim(claim.Id, (bool)e.Value!)" /></td>
+                            <td>@claim.Expense.Date.ToString("dd/MM") — @claim.Expense.RawDescription</td>
+                            <td>@claim.RequestedOn.ToString("dd/MM/yyyy")</td>
+                            <td class="num">@Money(claim.Remaining)</td>
+                            <td>
+                                <input value="@AmountFor(claim)" data-money="brl" inputmode="numeric" disabled="@(!_checked.Contains(claim.Id))"
+                                       @onchange="e => _amounts[claim.Id] = e.Value?.ToString() ?? string.Empty" />
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+            <p class="muted">
+                Soma marcada: <strong>@Money(CheckedTotal)</strong> de @Money(selected.Free).
+                @if (_suggestionExact) { <span>A combinação sugerida soma exatamente o valor do Pix.</span> }
+                else { <span>Nenhuma combinação soma exatamente o valor do Pix: sugeri preencher os mais antigos (reembolso parcial). Ajuste os valores se precisar.</span> }
+            </p>
+            <button class="primary" @onclick="LinkSelected">Ligar</button>
+        }
+    }
+</section>
+
+<section class="card-box wide">
+    <h2>Novo pedido</h2>
+    <p class="muted">Marque um gasto que você enviou ao plano para pedir reembolso.</p>
+    <div class="filters">
+        <label>Data do pedido <input type="date" @bind="_requestDate" /></label>
+        <label>Filtrar gastos <input @bind="_expenseFilter" @bind:event="oninput" placeholder="descrição ou categoria" /></label>
+        <label class="check"><input type="checkbox" @bind="_onlyHealth" /> Só categorias com “saúde”</label>
+    </div>
+    <table class="grid">
+        <thead><tr><th>Data</th><th>Descrição</th><th>Categoria</th><th class="num">Valor</th><th></th></tr></thead>
+        <tbody>
+            @foreach (var expense in ExpenseCandidates)
+            {
+                <tr @key="expense.Id">
+                    <td>@expense.Date.ToString("dd/MM/yyyy")</td>
+                    <td>@expense.RawDescription <span class="muted">@expense.Account</span></td>
+                    <td>@(expense.Category ?? "(sem categoria)")</td>
+                    <td class="num">@Money(-expense.Amount)</td>
+                    <td><button @onclick="() => AddClaim(expense.Id)">Pedir reembolso</button></td>
+                </tr>
+            }
+            @if (!ExpenseCandidates.Any())
+            {
+                <tr><td colspan="5" class="muted">Nenhum gasto encontrado nos últimos 180 dias com esse filtro.</td></tr>
+            }
+        </tbody>
+    </table>
+</section>
+
+@code {
+    private static readonly CultureInfo Br = new("pt-BR");
+    private const int LookbackDays = 180;
+
+    private sealed record PixCandidate(Transaction Entry, decimal Free);
+
+    private IReadOnlyList<ReimbursementClaim> _claims = Array.Empty<ReimbursementClaim>();
+    private IReadOnlyList<ReimbursementClaim> _openClaims = Array.Empty<ReimbursementClaim>();
+    private IReadOnlyList<Transaction> _all = Array.Empty<Transaction>();
+    private ReimbursementTotals _totals = new(0, 0, 0m, 0m, 0m, 0m);
+    private string? _error;
+
+    private bool _showClosed;
+    private string _pixFilter = "";
+    private string _expenseFilter = "";
+    private bool _onlyHealth = true;
+    private DateTime _requestDate = DateTime.Today;
+
+    private Guid? _pixId;
+    private bool _suggestionExact;
+    private readonly HashSet<Guid> _checked = new();
+    private readonly Dictionary<Guid, string> _amounts = new();
+
+    private static DateOnly Today => DateOnly.FromDateTime(DateTime.Today);
+
+    protected override void OnInitialized() => Reload();
+
+    private void Reload()
+    {
+        _claims = Store.GetReimbursementClaims();
+        _all = Store.GetAll();
+        _openClaims = _claims.Where(c => c.IsOpen).ToList();
+        _totals = ReimbursementRules.Summarize(_claims, Today);
+    }
+
+    private IEnumerable<ReimbursementClaim> VisibleClaims =>
+        (_showClosed ? _claims : _openClaims).OrderByDescending(c => c.IsOpen).ThenBy(c => c.ExpectedOn);
+
+    private Dictionary<Guid, decimal> AllocatedByPix =>
+        _claims.SelectMany(c => c.Payments).GroupBy(p => p.PixId).ToDictionary(g => g.Key, g => g.Sum(p => p.Amount));
+
+    private IEnumerable<PixCandidate> PixCandidates
+    {
+        get
+        {
+            var allocated = AllocatedByPix;
+            var since = Today.AddDays(-LookbackDays);
+            return _all
+                .Where(t => t.Amount > 0 && t.Type == TransactionType.Income && t.Date >= since
+                            && (_pixFilter.Length == 0 || t.RawDescription.Contains(_pixFilter, StringComparison.CurrentCultureIgnoreCase)))
+                .Select(t => new PixCandidate(t, t.Amount - allocated.GetValueOrDefault(t.Id)))
+                .Where(p => p.Free > 0)
+                .OrderByDescending(p => p.Entry.Date);
+        }
+    }
+
+    private PixCandidate? SelectedPix => _pixId is { } id ? PixCandidates.FirstOrDefault(p => p.Entry.Id == id) : null;
+
+    private IEnumerable<Transaction> ExpenseCandidates
+    {
+        get
+        {
+            var claimed = _claims.Select(c => c.Id).ToHashSet();
+            var since = Today.AddDays(-LookbackDays);
+            return _all
+                .Where(t => t.Amount < 0 && t.Date >= since && !claimed.Contains(t.Id)
+                            && SpendingReportCounts(t)
+                            && (!_onlyHealth || (t.Category?.Contains("saúde", StringComparison.CurrentCultureIgnoreCase) ?? false)
+                                             || (t.Category?.Contains("saude", StringComparison.CurrentCultureIgnoreCase) ?? false))
+                            && (_expenseFilter.Length == 0
+                                || t.RawDescription.Contains(_expenseFilter, StringComparison.CurrentCultureIgnoreCase)
+                                || (t.Category?.Contains(_expenseFilter, StringComparison.CurrentCultureIgnoreCase) ?? false)))
+                .OrderByDescending(t => t.Date)
+                .Take(60);
+        }
+    }
+
+    private static bool SpendingReportCounts(Transaction t) => t.Type is TransactionType.Expense or TransactionType.Undefined;
+
+    private string PixLabel(Guid pixId) =>
+        _all.FirstOrDefault(t => t.Id == pixId) is { } pix ? pix.Date.ToString("dd/MM/yyyy") : "?";
+
+    private static string StatusText(ReimbursementClaim claim) =>
+        claim.Settled ? "Reembolsado" :
+        claim.Status == ClaimStatus.Closed ? (claim.Received > 0 ? "Encerrado: reembolso parcial" : "Encerrado sem reembolso") :
+        claim.IsLate(Today) ? $"Atrasado há {Today.DayNumber - claim.ExpectedOn.DayNumber} dia(s)" :
+        claim.Status == ClaimStatus.AwaitingDocuments ? "Documentos pedidos" :
+        claim.Received > 0 ? "Pago em parte, aguardando o resto" :
+        $"Aguardando ({claim.DaysWaiting(Today)} dia(s))";
+
+    // ---- claims ----
+
+    private void AddClaim(Guid expenseId)
+    {
+        _error = null;
+        try
+        {
+            Store.AddReimbursementClaim(expenseId, DateOnly.FromDateTime(_requestDate));
+            Toasts.Success("Pedido de reembolso registrado.");
+        }
+        catch (ArgumentException ex) { _error = ex.Message; }
+        Reload();
+    }
+
+    private void MoreDocuments(Guid id)
+    {
+        Store.RequestMoreDocuments(id, Today);
+        Toasts.Success("Prazo reiniciado: 30 dias a partir de hoje.");
+        Reload();
+    }
+
+    private void Close(Guid id)
+    {
+        Store.CloseReimbursementClaim(id);
+        Toasts.Success("Pedido encerrado: o que faltou virou custo real.");
+        Reload();
+    }
+
+    private void Reopen(Guid id)
+    {
+        Store.ReopenReimbursementClaim(id);
+        Reload();
+    }
+
+    private void Remove(Guid id)
+    {
+        Store.RemoveReimbursementClaim(id);
+        Toasts.Success("Pedido removido (o gasto e os Pix continuam lançados).");
+        Reload();
+    }
+
+    private void Unlink(Guid claimId, Guid pixId)
+    {
+        Store.UnlinkPix(claimId, pixId);
+        Toasts.Success("Ligação desfeita.");
+        Reload();
+    }
+
+    // ---- linking ----
+
+    private void SelectPix(Guid id)
+    {
+        _error = null;
+        if (_pixId == id)
+        {
+            _pixId = null;
+            return;
+        }
+
+        _pixId = id;
+        _checked.Clear();
+        _amounts.Clear();
+        if (SelectedPix is not { } pix) return;
+
+        var suggestion = ReimbursementRules.Suggest(pix.Free, _openClaims);
+        _suggestionExact = suggestion.Exact;
+        foreach (var item in suggestion.Items)
+        {
+            _checked.Add(item.ClaimId);
+            _amounts[item.ClaimId] = item.Amount.ToString("N2", Br);
+        }
+    }
+
+    private void ToggleClaim(Guid id, bool on)
+    {
+        if (on)
+        {
+            _checked.Add(id);
+            if (!_amounts.ContainsKey(id) && _openClaims.FirstOrDefault(c => c.Id == id) is { } claim)
+            {
+                var left = Math.Max(0m, (SelectedPix?.Free ?? 0m) - CheckedTotal);
+                _amounts[id] = Math.Min(left, claim.Remaining).ToString("N2", Br);
+            }
+        }
+        else
+        {
+            _checked.Remove(id);
+        }
+    }
+
+    private string AmountFor(ReimbursementClaim claim) => _amounts.TryGetValue(claim.Id, out var text) ? text : "";
+
+    private decimal CheckedTotal =>
+        _checked.Sum(id => _amounts.TryGetValue(id, out var text) && BrazilianCurrencyParser.TryParse(text, out var value) ? value : 0m);
+
+    private void LinkSelected()
+    {
+        _error = null;
+        if (_pixId is not { } pixId) return;
+
+        var allocations = new List<Allocation>();
+        foreach (var id in _checked)
+        {
+            if (!_amounts.TryGetValue(id, out var text) || !BrazilianCurrencyParser.TryParse(text, out var amount) || amount <= 0)
+            {
+                _error = "Informe um valor maior que zero para cada pedido marcado.";
+                return;
+            }
+            allocations.Add(new Allocation(id, amount));
+        }
+
+        try
+        {
+            Store.LinkPix(pixId, allocations);
+            Toasts.Success($"Pix ligado a {allocations.Count} pedido(s).");
+            _pixId = null;
+            _checked.Clear();
+            _amounts.Clear();
+        }
+        catch (ArgumentException ex)
+        {
+            _error = ex.Message;
+        }
+        Reload();
+    }
+
+    private static string Money(decimal value) => "R$ " + value.ToString("N2", Br);
+}

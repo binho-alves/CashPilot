@@ -1,4 +1,5 @@
 using CashPilot.Domain.Accounts;
+using CashPilot.Domain.Reimbursements;
 using CashPilot.Domain.Transactions;
 
 namespace CashPilot.Domain.Payments;
@@ -18,6 +19,8 @@ public sealed record ForecastSummary(IReadOnlyList<ForecastDay> Days, ForecastDa
 /// <item>recurring expenses and incomes on bank accounts (<see cref="RecurringEntries"/>) go on their expected day;
 /// an expense is skipped when a registered boleto or a future entry of about the same amount is already within
 /// <see cref="CoverDays"/> days, so it is not counted twice.</item>
+/// <item>open reimbursement claims come in as expected inflows on the expected date (tomorrow at the earliest, when
+/// the plan is already late), for what is still to receive: the plan never pays more than was claimed, but may pay less.</item>
 /// </list>
 /// It is an estimate: recurring entries assume the next months look like the last ones.
 /// </summary>
@@ -33,7 +36,8 @@ public static class CashForecast
         DateOnly today,
         DateOnly until,
         IEnumerable<CardBillSettlement>? settlements = null,
-        bool includeIncome = true)
+        bool includeIncome = true,
+        IEnumerable<ReimbursementClaim>? reimbursements = null)
     {
         var accountList = accounts.ToList();
         var all = transactions.ToList();
@@ -93,6 +97,14 @@ public static class CashForecast
             }
         }
 
+        foreach (var claim in (reimbursements ?? Array.Empty<ReimbursementClaim>()).Where(c => c.IsOpen))
+        {
+            var expected = claim.ExpectedOn > today ? claim.ExpectedOn : today.AddDays(1);
+            if (expected > until) continue;
+            items.Add(new UpcomingPayment(UpcomingKind.ExpectedReimbursement,
+                $"Reembolso esperado: {claim.Expense.RawDescription}", expected, claim.Remaining, null, null, false));
+        }
+
         foreach (var ((_, closing), extra) in extras.OrderBy(e => e.Key.Closing))
         {
             var index = items.FindIndex(i => i.Kind == UpcomingKind.CardBill
@@ -109,8 +121,8 @@ public static class CashForecast
     }
 
     /// <summary>
-    /// Day by day balance. Overdue items come off the starting balance at once; inflows (<see cref="UpcomingKind.RecurringIncome"/>)
-    /// add to it. The lowest balance can only happen on a day with entries, so only those days are listed.
+    /// Day by day balance. Overdue items come off the starting balance at once; inflows (<see cref="UpcomingKind.RecurringIncome"/>
+    /// and <see cref="UpcomingKind.ExpectedReimbursement"/>) add to it. The lowest balance can only happen on a day with entries, so only those days are listed.
     /// </summary>
     public static ForecastSummary Project(
         decimal startBalance, IEnumerable<UpcomingPayment> items, decimal lisLimit, DateOnly today, int horizonDays)
@@ -122,8 +134,8 @@ public static class CashForecast
         var days = new List<ForecastDay>();
         foreach (var group in list.Where(i => !i.Overdue && i.DueDate <= limit).GroupBy(i => i.DueDate).OrderBy(g => g.Key))
         {
-            var outflow = group.Where(i => i.Kind != UpcomingKind.RecurringIncome).Sum(i => i.Amount);
-            var inflow = group.Where(i => i.Kind == UpcomingKind.RecurringIncome).Sum(i => i.Amount);
+            var outflow = group.Where(i => !IsInflow(i)).Sum(i => i.Amount);
+            var inflow = group.Where(IsInflow).Sum(i => i.Amount);
             balance += inflow - outflow;
             days.Add(new ForecastDay(group.Key, group.ToList(), outflow, inflow, balance));
         }
@@ -138,6 +150,9 @@ public static class CashForecast
             days.FirstOrDefault(d => d.Balance < 0)?.Date,
             days.FirstOrDefault(d => d.Balance < 0 && -d.Balance > lisLimit)?.Date);
     }
+
+    public static bool IsInflow(UpcomingPayment item) =>
+        item.Kind is UpcomingKind.RecurringIncome or UpcomingKind.ExpectedReimbursement;
 
     private static bool IsCovered(IEnumerable<UpcomingPayment> existing, DateOnly date, decimal amount) =>
         existing.Any(i => Math.Abs(i.DueDate.DayNumber - date.DayNumber) <= CoverDays
