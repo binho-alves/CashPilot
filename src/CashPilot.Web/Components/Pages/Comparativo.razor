@@ -1,0 +1,128 @@
+@page "/comparativo"
+@using CashPilot.Domain.Reports
+@inject CashPilotStore Store
+
+<PageTitle>Comparativo — CashPilot</PageTitle>
+
+<h1>Comparativo mensal</h1>
+
+<p class="muted">
+    Gasto por categoria no mês escolhido contra o mês anterior e contra a média dos até três meses antes dele.
+    Pix entre contas próprias e pagamento de fatura não entram. Um mês ainda em andamento aparece menor do que será.
+</p>
+
+@if (_months.Count == 0)
+{
+    <p class="muted">Nenhum lançamento ainda.</p>
+}
+else
+{
+    <div class="toolbar">
+        <label>
+            Mês
+            <select value="@_selectedKey" @onchange="OnMonthChanged">
+                @foreach (var month in _months)
+                {
+                    <option value="@Key(month)">@Label(month)</option>
+                }
+            </select>
+        </label>
+    </div>
+
+    @if (_comparison is { } comparison)
+    {
+        <div class="cards">
+            <div class="card">
+                <span class="muted">Gasto no mês</span>
+                <strong>@Money(comparison.CurrentTotal)</strong>
+            </div>
+            <div class="card">
+                <span class="muted">Mês anterior</span>
+                <strong>@Money(comparison.PreviousTotal)</strong>
+            </div>
+            <div class="card @(comparison.Delta > 0 ? "warn" : "")">
+                <span class="muted">Diferença</span>
+                <strong>@Signed(comparison.Delta)</strong>
+            </div>
+        </div>
+
+        @if (comparison.Rows.Any(r => r.IsBigRise))
+        {
+            <p class="error">
+                Subiram bastante (pelo menos @Money(MonthlyComparison.BigRiseAmount) e @((MonthlyComparison.BigRiseFraction).ToString("P0", Br))):
+                @string.Join(", ", comparison.Rows.Where(r => r.IsBigRise).Select(r => r.Category)).
+            </p>
+        }
+
+        <table class="grid">
+            <thead>
+                <tr>
+                    <th>Categoria</th>
+                    <th class="num">Neste mês</th>
+                    <th class="num">Mês anterior</th>
+                    <th class="num">Diferença</th>
+                    <th class="num">%</th>
+                    <th class="num">Média recente</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var row in comparison.Rows)
+                {
+                    <tr @key="row.Category">
+                        <td>@row.Category @if (row.IsBigRise) { <span class="neg">▲</span> }</td>
+                        <td class="num">@Money(row.Current)</td>
+                        <td class="num">@Money(row.Previous)</td>
+                        <td class="num @(row.IsBigRise ? "neg" : "")">@Signed(row.Delta)</td>
+                        <td class="num">@(row.IsNew ? "novo" : row.DeltaFraction is { } f ? Signed(f * 100m, "N0") + "%" : "")</td>
+                        <td class="num">@(row.RecentAverage is { } avg ? Money(avg) : "")</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+}
+
+@code {
+    private static readonly CultureInfo Br = new("pt-BR");
+
+    private static readonly string[] MonthNames =
+    {
+        "janeiro", "fevereiro", "março", "abril", "maio", "junho",
+        "julho", "agosto", "setembro", "outubro", "novembro", "dezembro",
+    };
+
+    private IReadOnlyList<MonthlySpending> _months = Array.Empty<MonthlySpending>();
+    private string _selectedKey = "";
+    private MonthComparison? _comparison;
+
+    protected override void OnInitialized()
+    {
+        // Newest first in the picker.
+        _months = SpendingReport.ByMonth(Store.GetAll()).Reverse().ToList();
+
+        var today = DateTime.Today;
+        var current = _months.FirstOrDefault(m => m.Year * 12 + m.Month <= today.Year * 12 + today.Month) ?? _months.FirstOrDefault();
+        _selectedKey = current is null ? "" : Key(current);
+        Recalculate();
+    }
+
+    private void OnMonthChanged(ChangeEventArgs e)
+    {
+        _selectedKey = e.Value?.ToString() ?? "";
+        Recalculate();
+    }
+
+    private void Recalculate() =>
+        _comparison = _months.FirstOrDefault(m => Key(m) == _selectedKey) is { } selected
+            ? MonthlyComparison.Compare(_months, selected.Year, selected.Month)
+            : null;
+
+    private static string Key(MonthlySpending m) => $"{m.Year}-{m.Month:00}";
+
+    private static string Label(MonthlySpending m) => $"{MonthNames[m.Month - 1]} de {m.Year}";
+
+    private static string Money(decimal value) => "R$ " + value.ToString("N2", Br);
+
+    private static string Signed(decimal value, string format = "N2") =>
+        (value > 0 ? "+" : "") + value.ToString(format, Br);
+}

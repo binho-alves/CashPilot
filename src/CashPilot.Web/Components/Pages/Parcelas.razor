@@ -1,0 +1,115 @@
+@page "/parcelas"
+@using CashPilot.Domain.Payments
+@inject CashPilotStore Store
+
+<PageTitle>Parcelas — CashPilot</PageTitle>
+
+<h1>Parcelas futuras</h1>
+
+<p class="muted">
+    Compras parceladas no cartão que ainda têm parcelas a cair. Cada parcela vai para a próxima fatura do cartão
+    (mesmo dia de fechamento) e vence no dia de vencimento cadastrado em <a href="contas">Contas</a>.
+    A projeção parte da última parcela já importada.
+</p>
+
+@if (_plans.Count == 0)
+{
+    <p class="muted">Nenhuma parcela futura encontrada. Importe faturas com compras parceladas (ex.: “PARC 03/06”).</p>
+}
+else
+{
+    <div class="cards">
+        <div class="card">
+            <span class="muted">Já comprometido</span>
+            <strong>@Money(_plans.Sum(p => p.RemainingTotal))</strong>
+        </div>
+        <div class="card">
+            <span class="muted">Compras parceladas ativas</span>
+            <strong>@_plans.Count</strong>
+        </div>
+        <div class="card">
+            <span class="muted">Próximo mês (@MonthLabel(_months[0]))</span>
+            <strong>@Money(_months[0].Total)</strong>
+        </div>
+    </div>
+
+    <h2>Por mês de vencimento</h2>
+    <table class="grid">
+        <thead>
+            <tr><th>Mês</th><th class="num">Parcelas</th><th class="num">Total</th></tr>
+        </thead>
+        <tbody>
+            @foreach (var month in _months)
+            {
+                var key = $"{month.Year}-{month.Month:00}";
+                <tr class="clickable" @onclick="() => Toggle(key)" @key="key">
+                    <td>@(_open.Contains(key) ? "▾" : "▸") @MonthLabel(month)</td>
+                    <td class="num">@month.Items.Count</td>
+                    <td class="num">@Money(month.Total)</td>
+                </tr>
+                @if (_open.Contains(key))
+                {
+                    @foreach (var item in month.Items)
+                    {
+                        <tr class="sub" @key="@(key + item.Description + item.Number + item.Account)">
+                            <td>@item.Due.ToString("dd/MM") — @item.Description (@item.Number/@item.Count)
+                                <span class="muted">@item.Account</span></td>
+                            <td></td>
+                            <td class="num">@Money(item.Amount)</td>
+                        </tr>
+                    }
+                }
+            }
+        </tbody>
+    </table>
+
+    <h2>Por compra</h2>
+    <table class="grid">
+        <thead>
+            <tr><th>Compra</th><th>Cartão</th><th>Última vista</th><th class="num">Valor</th><th class="num">Faltam</th><th class="num">Restante</th><th>Termina em</th></tr>
+        </thead>
+        <tbody>
+            @foreach (var plan in _plans)
+            {
+                <tr @key="@(plan.Account + plan.Description + plan.Amount + plan.Count)">
+                    <td>@plan.Description</td>
+                    <td>@plan.Account</td>
+                    <td>@plan.LastNumber/@plan.Count</td>
+                    <td class="num">@Money(plan.Amount)</td>
+                    <td class="num">@plan.Future.Count</td>
+                    <td class="num">@Money(plan.RemainingTotal)</td>
+                    <td>@plan.Future[^1].Due.ToString("MM/yyyy")</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+@code {
+    private static readonly CultureInfo Br = new("pt-BR");
+
+    private static readonly string[] MonthNames =
+    {
+        "janeiro", "fevereiro", "março", "abril", "maio", "junho",
+        "julho", "agosto", "setembro", "outubro", "novembro", "dezembro",
+    };
+
+    private IReadOnlyList<InstallmentPlan> _plans = Array.Empty<InstallmentPlan>();
+    private IReadOnlyList<InstallmentMonth> _months = Array.Empty<InstallmentMonth>();
+    private readonly HashSet<string> _open = new();
+
+    protected override void OnInitialized()
+    {
+        _plans = FutureInstallments.Build(Store.GetAccounts(), Store.GetAll(), DateOnly.FromDateTime(DateTime.Today));
+        _months = FutureInstallments.ByMonth(_plans);
+    }
+
+    private void Toggle(string key)
+    {
+        if (!_open.Remove(key)) _open.Add(key);
+    }
+
+    private static string MonthLabel(InstallmentMonth m) => $"{MonthNames[m.Month - 1]} de {m.Year}";
+
+    private static string Money(decimal value) => "R$ " + value.ToString("N2", Br);
+}
