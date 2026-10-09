@@ -80,3 +80,6 @@ tr.detail td { background: var(--bg); padding: 4px 12px 10px 28px; }
 
 .scroll { max-height: 480px; overflow: auto; margin: 12px 0; }
 .dim { opacity: .6; }
+
+button.link { background: none; border: none; color: var(--accent); padding: 6px 4px; text-decoration: underline; }
+.warn-text { color: var(--warn); }

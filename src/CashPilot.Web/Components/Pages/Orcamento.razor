@@ -1,0 +1,199 @@
+@page "/orcamento"
+@using CashPilot.Domain.Descriptions
+@using CashPilot.Domain.Reports
+@inject CashPilotStore Store
+@inject ToastService Toasts
+
+<PageTitle>Orçamento — CashPilot</PageTitle>
+
+<h1>Orçamento por categoria</h1>
+
+<p class="muted">
+    Defina quanto quer gastar por mês em cada categoria e acompanhe quanto já foi.
+    O limite vale para todos os meses. A sugestão é a média dos até três meses anteriores, arredondada para cima.
+    Pix entre contas próprias e pagamento de fatura não contam como gasto.
+</p>
+
+@if (_months.Count == 0)
+{
+    <p class="muted">Nenhum lançamento ainda.</p>
+}
+else
+{
+    <div class="toolbar">
+        <label>
+            Mês
+            <select value="@_selectedKey" @onchange="OnMonthChanged">
+                @foreach (var month in _months)
+                {
+                    <option value="@Key(month)">@Label(month)</option>
+                }
+            </select>
+        </label>
+    </div>
+
+    @if (_error is not null)
+    {
+        <p class="error">@_error</p>
+    }
+
+    @if (_report is { } report)
+    {
+        <div class="cards">
+            <div class="card">
+                <span class="muted">Limite total</span>
+                <strong>@Money(report.TotalLimit)</strong>
+            </div>
+            <div class="card @(report.SpentInBudgeted > report.TotalLimit ? "warn" : "")">
+                <span class="muted">Gasto nas categorias com limite</span>
+                <strong>@Money(report.SpentInBudgeted)</strong>
+            </div>
+            <div class="card @(report.Uncategorized > 0 ? "warn" : "")">
+                <span class="muted">Sem categoria (sem limite)</span>
+                <strong>@Money(report.Uncategorized)</strong>
+                @if (report.Uncategorized > 0)
+                {
+                    <a href="pendentes">classificar</a>
+                }
+            </div>
+        </div>
+
+        <table class="grid">
+            <thead>
+                <tr>
+                    <th>Categoria</th>
+                    <th class="num">Gasto</th>
+                    <th class="num">Limite</th>
+                    <th class="num">Resta</th>
+                    <th class="num">%</th>
+                    <th></th>
+                    <th>Definir limite</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var line in report.Lines)
+                {
+                    <tr @key="line.Category">
+                        <td>@line.Category</td>
+                        <td class="num">@Money(line.Spent)</td>
+                        <td class="num">@(line.Limit is { } l ? Money(l) : "")</td>
+                        <td class="num @(line.Status == BudgetStatus.Over ? "neg" : "")">@(line.Remaining is { } r ? Money(r) : "")</td>
+                        <td class="num">@(line.Fraction is { } f ? f.ToString("P0", Br) : "")</td>
+                        <td>
+                            @switch (line.Status)
+                            {
+                                case BudgetStatus.Over:
+                                    <span class="neg">estourou</span>
+                                    break;
+                                case BudgetStatus.Near:
+                                    <span class="warn-text">perto do limite</span>
+                                    break;
+                            }
+                            @if (line.ProjectedOver)
+                            {
+                                <span class="muted">no ritmo atual termina em @Money(line.Projected!.Value)</span>
+                            }
+                        </td>
+                        <td>
+                            <input value="@InputFor(line)" data-money="brl" inputmode="numeric" placeholder="R$ 0,00"
+                                   @onchange="e => _inputs[line.Category] = e.Value?.ToString() ?? string.Empty" />
+                            <button @onclick="() => Save(line.Category)">Salvar</button>
+                            @if (line.Suggested is { } suggested && line.Limit != suggested)
+                            {
+                                <button class="link" @onclick="() => Apply(line.Category, suggested)">Usar @Money(suggested)</button>
+                            }
+                            @if (line.Limit is not null)
+                            {
+                                <button class="link" @onclick="() => Remove(line.Category)">Remover</button>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+}
+
+@code {
+    private static readonly CultureInfo Br = new("pt-BR");
+
+    private static readonly string[] MonthNames =
+    {
+        "janeiro", "fevereiro", "março", "abril", "maio", "junho",
+        "julho", "agosto", "setembro", "outubro", "novembro", "dezembro",
+    };
+
+    private IReadOnlyList<MonthlySpending> _months = Array.Empty<MonthlySpending>();
+    private IReadOnlyList<MonthlySpending> _history = Array.Empty<MonthlySpending>();
+    private string _selectedKey = "";
+    private BudgetReport? _report;
+    private string? _error;
+    private readonly Dictionary<string, string> _inputs = new();
+
+    private static DateOnly Today => DateOnly.FromDateTime(DateTime.Today);
+
+    protected override void OnInitialized()
+    {
+        _history = SpendingReport.ByMonth(Store.GetAll());
+        _months = _history.Reverse().ToList(); // newest first in the picker
+
+        var current = _months.FirstOrDefault(m => m.Year * 12 + m.Month <= Today.Year * 12 + Today.Month) ?? _months.FirstOrDefault();
+        _selectedKey = current is null ? "" : Key(current);
+        Recalculate();
+    }
+
+    private void OnMonthChanged(ChangeEventArgs e)
+    {
+        _selectedKey = e.Value?.ToString() ?? "";
+        _inputs.Clear();
+        Recalculate();
+    }
+
+    private void Recalculate() =>
+        _report = _months.FirstOrDefault(m => Key(m) == _selectedKey) is { } selected
+            ? Budgeting.Build(_history, Store.GetBudgets(), selected.Year, selected.Month, Today)
+            : null;
+
+    private string InputFor(BudgetLine line) =>
+        _inputs.TryGetValue(line.Category, out var typed) ? typed : line.Limit is { } l ? l.ToString("N2", Br) : "";
+
+    private void Save(string category)
+    {
+        _error = null;
+        _inputs.TryGetValue(category, out var text);
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            _error = $"Informe o limite de {category}.";
+            return;
+        }
+        if (!BrazilianCurrencyParser.TryParse(text, out var limit) || limit <= 0)
+        {
+            _error = "Limite inválido: use um valor maior que zero, como 800 ou 1.250,50.";
+            return;
+        }
+        Apply(category, limit);
+    }
+
+    private void Apply(string category, decimal limit)
+    {
+        _error = null;
+        Store.SetBudget(category, limit);
+        _inputs.Remove(category);
+        Toasts.Success($"Limite de {category}: {Money(limit)} por mês.");
+        Recalculate();
+    }
+
+    private void Remove(string category)
+    {
+        Store.RemoveBudget(category);
+        _inputs.Remove(category);
+        Toasts.Success($"Limite de {category} removido.");
+        Recalculate();
+    }
+
+    private static string Key(MonthlySpending m) => $"{m.Year}-{m.Month:00}";
+
+    private static string Label(MonthlySpending m) => $"{MonthNames[m.Month - 1]} de {m.Year}";
+
+    private static string Money(decimal value) => "R$ " + value.ToString("N2", Br);
+}

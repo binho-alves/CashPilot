@@ -335,6 +335,16 @@ public sealed class CashPilotStore : IDisposable
             command.Parameters.AddWithValue("$to", to);
             command.ExecuteNonQuery();
         }
+        // The limit follows the category; when the target already has its own limit, that one stays.
+        using (var command = CreateCommand("""
+            UPDATE OR IGNORE budgets SET category = $to WHERE category = $from;
+            DELETE FROM budgets WHERE category = $from;
+            """))
+        {
+            command.Parameters.AddWithValue("$from", from);
+            command.Parameters.AddWithValue("$to", to);
+            command.ExecuteNonQuery();
+        }
         return changed;
     }
 
@@ -515,6 +525,39 @@ public sealed class CashPilotStore : IDisposable
         using var command = CreateCommand("DELETE FROM card_bill_settlements WHERE card = $card AND closing = $closing;");
         command.Parameters.AddWithValue("$card", card);
         command.Parameters.AddWithValue("$closing", closing.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+        return command.ExecuteNonQuery() > 0;
+    }
+
+    /// <summary>Monthly spending limit per category.</summary>
+    public IReadOnlyDictionary<string, decimal> GetBudgets()
+    {
+        var result = new Dictionary<string, decimal>();
+        using var command = CreateCommand("SELECT category, limit_cents FROM budgets;");
+        using var reader = command.ExecuteReader();
+        while (reader.Read()) result[reader.GetString(0)] = FromCents(reader.GetInt64(1));
+        return result;
+    }
+
+    /// <summary>Sets (or replaces) the monthly limit of a category.</summary>
+    public void SetBudget(string category, decimal limit)
+    {
+        category = category?.Trim() ?? "";
+        if (category.Length == 0) throw new ArgumentException("Category is required.", nameof(category));
+        if (limit <= 0) throw new ArgumentException("The limit must be positive.", nameof(limit));
+
+        using var command = CreateCommand("""
+            INSERT INTO budgets (category, limit_cents) VALUES ($category, $cents)
+            ON CONFLICT (category) DO UPDATE SET limit_cents = excluded.limit_cents;
+            """);
+        command.Parameters.AddWithValue("$category", category);
+        command.Parameters.AddWithValue("$cents", ToCents(limit));
+        command.ExecuteNonQuery();
+    }
+
+    public bool RemoveBudget(string category)
+    {
+        using var command = CreateCommand("DELETE FROM budgets WHERE category = $category;");
+        command.Parameters.AddWithValue("$category", category);
         return command.ExecuteNonQuery() > 0;
     }
 

@@ -87,6 +87,14 @@ internal static class Schema
             PRIMARY KEY (card, closing)
         );
         """,
+
+        // v7: monthly spending limit per category (money in cents).
+        """
+        CREATE TABLE budgets (
+            category    TEXT PRIMARY KEY,
+            limit_cents INTEGER NOT NULL
+        );
+        """,
     ];
 
     public static void Apply(SqliteConnection connection)
