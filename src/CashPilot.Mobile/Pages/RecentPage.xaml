@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="CashPilot.Mobile.Pages.RecentPage"
+             Title="Últimos lançamentos">
+    <Grid RowDefinitions="Auto,*" Padding="16" RowSpacing="8">
+        <VerticalStackLayout Grid.Row="0" Spacing="4">
+            <Label Text="Últimos lançamentos" FontSize="22" FontAttributes="Bold" />
+            <Label x:Name="InfoLabel" TextColor="Gray" />
+        </VerticalStackLayout>
+        <RefreshView x:Name="Refresher" Grid.Row="1" Refreshing="OnRefreshing">
+            <CollectionView x:Name="List">
+                <CollectionView.EmptyView>
+                    <Label Text="Nada por aqui ainda." TextColor="Gray" />
+                </CollectionView.EmptyView>
+                <CollectionView.ItemTemplate>
+                    <DataTemplate>
+                        <Grid ColumnDefinitions="*,Auto" Padding="0,8" ColumnSpacing="8">
+                            <VerticalStackLayout Grid.Column="0" Spacing="2">
+                                <Label Text="{Binding Title}" FontAttributes="Bold" />
+                                <Label Text="{Binding Subtitle}" TextColor="Gray" FontSize="12" />
+                                <Label Text="{Binding Note}" TextColor="#B45309" FontSize="12" IsVisible="{Binding HasNote}" />
+                            </VerticalStackLayout>
+                            <VerticalStackLayout Grid.Column="1" Spacing="2" HorizontalOptions="End">
+                                <Label Text="{Binding AmountText}" FontAttributes="Bold" HorizontalOptions="End" />
+                                <Button Text="Apagar" FontSize="12" Padding="8,0" HeightRequest="32" Clicked="OnDelete" />
+                            </VerticalStackLayout>
+                        </Grid>
+                    </DataTemplate>
+                </CollectionView.ItemTemplate>
+            </CollectionView>
+        </RefreshView>
+    </Grid>
+</ContentPage>

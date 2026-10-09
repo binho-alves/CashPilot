@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Android app (.NET MAUI) to type entries on the phone. It is NOT part of CashPilot.slnx on purpose: building it
+    needs the MAUI workload (dotnet workload install maui-android) and the Android SDK, which `dotnet test` of the
+    rest of the solution should not require. Build it by itself: dotnet build src/CashPilot.Mobile -f net10.0-android
+  -->
+  <PropertyGroup>
+    <!-- Singular on purpose: Directory.Build.props already sets TargetFramework, and TargetFrameworks would be ignored. -->
+    <TargetFramework>net10.0-android</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>CashPilot.Mobile</RootNamespace>
+    <UseMaui>true</UseMaui>
+    <SingleProject>true</SingleProject>
+    <EnableDefaultCompileItems>true</EnableDefaultCompileItems>
+
+    <ApplicationTitle>CashPilot</ApplicationTitle>
+    <ApplicationId>br.com.cashpilot.mobile</ApplicationId>
+    <ApplicationDisplayVersion>1.0</ApplicationDisplayVersion>
+    <ApplicationVersion>1</ApplicationVersion>
+    <SupportedOSPlatformVersion>24.0</SupportedOSPlatformVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <MauiIcon Include="Resources\AppIcon\appicon.svg" ForegroundFile="Resources\AppIcon\appiconfg.svg" Color="#0F766E" />
+    <MauiSplashScreen Include="Resources\Splash\splash.svg" Color="#0F766E" BaseSize="128,128" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\CashPilot.Contracts\CashPilot.Contracts.csproj" />
+  </ItemGroup>
+</Project>

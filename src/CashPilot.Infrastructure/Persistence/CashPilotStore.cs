@@ -228,6 +228,18 @@ public sealed class CashPilotStore : IDisposable
         return command.ExecuteNonQuery() > 0;
     }
 
+    /// <summary>The entries typed by hand (source "manual"), newest first, for the phone's "last entries" list.</summary>
+    public IReadOnlyList<Transaction> GetRecentManual(int limit) => Query(
+        $"SELECT * FROM transactions WHERE deleted = 0 AND source = 'manual' ORDER BY imported_at DESC, rowid DESC LIMIT {Math.Clamp(limit, 1, 200)};");
+
+    /// <summary>Whether the id is a live entry typed by hand. Imported entries are not, so the phone cannot delete them.</summary>
+    public bool IsManualEntry(Guid id)
+    {
+        using var command = CreateCommand("SELECT 1 FROM transactions WHERE id = $id AND deleted = 0 AND source = 'manual' LIMIT 1;");
+        command.Parameters.AddWithValue("$id", id.ToString());
+        return command.ExecuteScalar() is not null;
+    }
+
     /// <summary>Applies the current rules (exact, contains, similarity) to every entry still without a category.</summary>
     public int ReclassifyPending()
     {

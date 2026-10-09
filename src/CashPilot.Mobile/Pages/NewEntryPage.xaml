@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="CashPilot.Mobile.Pages.NewEntryPage"
+             Title="Novo lançamento">
+    <ScrollView>
+        <VerticalStackLayout Padding="16" Spacing="10">
+            <Label Text="Novo lançamento" FontSize="22" FontAttributes="Bold" />
+
+            <Label Text="Tipo" />
+            <Picker x:Name="KindPicker" SelectedIndexChanged="OnKindChanged" />
+
+            <Label Text="Valor (R$)" />
+            <Entry x:Name="AmountEntry" Keyboard="Numeric" Placeholder="0,00" FontSize="24" />
+
+            <Label Text="Descrição" />
+            <Entry x:Name="DescriptionEntry" Placeholder="ex.: Padaria" />
+
+            <Label Text="Conta" />
+            <Picker x:Name="AccountPicker" Title="Escolha a conta" />
+
+            <Label Text="Data" />
+            <DatePicker x:Name="DatePick" />
+
+            <VerticalStackLayout x:Name="CategoryBox" Spacing="4">
+                <Label Text="Categoria (opcional)" />
+                <Picker x:Name="CategoryPicker" Title="Deixar o CashPilot classificar" />
+            </VerticalStackLayout>
+
+            <Button x:Name="SaveButton" Text="Salvar" Clicked="OnSave" BackgroundColor="#0F766E" TextColor="White" Margin="0,8,0,0" />
+            <Label x:Name="StatusLabel" />
+
+            <Label x:Name="QueueLabel" TextColor="#B45309" />
+            <Button x:Name="SyncButton" Text="Enviar agora" Clicked="OnSyncClicked" IsVisible="False" />
+        </VerticalStackLayout>
+    </ScrollView>
+</ContentPage>

@@ -5,7 +5,8 @@ using CashPilot.Infrastructure.Persistence;
 namespace CashPilot.Infrastructure.Importing;
 
 /// <param name="AutoClassified">True when no category was given and the classifier knew the description.</param>
-public sealed record ManualEntryResult(Transaction Transaction, bool AutoClassified);
+/// <param name="AlreadyExisted">True when the client id was already stored (a retry from the phone): nothing was added.</param>
+public sealed record ManualEntryResult(Transaction Transaction, bool AutoClassified, bool AlreadyExisted = false);
 
 /// <summary>
 /// An entry typed by hand (cash, a Pix that is not in the statement yet). Unlike an import it has no dedup key to
@@ -21,6 +22,10 @@ public static class ManualEntries
     /// account, an outflow) and <see cref="TransactionType.InternalTransfer"/> (between own accounts, either side) are
     /// neither spending nor income, so they are never classified and teach nothing.
     /// </param>
+    /// <param name="clientId">
+    /// An id made by the caller (the phone). It becomes the entry id and the dedup key, so sending the same entry again
+    /// (even after the user deleted it) adds nothing and returns <see cref="ManualEntryResult.AlreadyExisted"/>.
+    /// </param>
     public static ManualEntryResult Add(
         CashPilotStore store,
         DateOnly date,
@@ -30,7 +35,8 @@ public static class ManualEntries
         bool income,
         Classification? chosen = null,
         bool learn = true,
-        TransactionType? type = null)
+        TransactionType? type = null,
+        Guid? clientId = null)
     {
         if (type is not (null or TransactionType.Expense or TransactionType.Income
                 or TransactionType.CardBillPayment or TransactionType.InternalTransfer))
@@ -51,6 +57,7 @@ public static class ManualEntries
             RawDescription = description,
             Type = neutral ? type!.Value : income ? TransactionType.Income : TransactionType.Expense,
         };
+        if (clientId is { } id && id != Guid.Empty) transaction = transaction with { Id = id };
 
         var auto = false;
         if (neutral)
@@ -71,14 +78,15 @@ public static class ManualEntries
             }
         }
 
+        var inserted = false;
         store.InTransaction(() =>
         {
-            store.TryInsert(transaction, "MANUAL-" + transaction.Id.ToString("N"), "manual");
-            if (!auto && learn && transaction.Category is not null)
+            inserted = store.TryInsert(transaction, "MANUAL-" + transaction.Id.ToString("N"), "manual");
+            if (inserted && !auto && learn && transaction.Category is not null)
                 store.Classify(description, new Classification(transaction.Category, transaction.Item ?? ""));
         });
 
-        return new ManualEntryResult(transaction, auto);
+        return new ManualEntryResult(transaction, auto, AlreadyExisted: !inserted);
     }
 
     private static Transaction WithClassification(Transaction transaction, Classification classification) =>

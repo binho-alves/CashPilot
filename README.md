@@ -19,6 +19,8 @@ Personal cash-flow control for people juggling several bank accounts, credit car
 |---|---|
 | `src/CashPilot.Domain` | Pure rules, no dependencies: description normalizer, learning classifier, transfer detector, card cash-out calculator |
 | `src/CashPilot.Infrastructure` | SQLite store (`Microsoft.Data.Sqlite`) and the importer for the spreadsheet's "Gastos" tab (CSV) |
+| `src/CashPilot.Contracts` | Records shared by the API and the phone app |
+| `src/CashPilot.Mobile` | .NET MAUI Android app to type entries on the phone (outside `CashPilot.slnx`; see [docs/phase4.md](docs/phase4.md)) |
 | `src/CashPilot.Cli` | Command line: `import-gastos`, `pending`, `classify`, `stats` |
 | `tests/CashPilot.Domain.Tests`, `tests/CashPilot.Infrastructure.Tests` | xUnit tests |
 
@@ -53,6 +55,6 @@ R$ 1,000 at 3.09% (1x): cost R$ 30.90, net R$ 969.10. The fee table by number of
    - Overdraft (LIS) settings per account: interest-free days and interest rate
    - Statement import with preview (OFX from any bank, Bradesco CSV/PDF, Itaú PDF), local OCR for card-bill/statement screenshots (Tesseract; needs `data/tessdata/por.traineddata`, git-ignored; text is reviewed before importing); other bank PDF layouts next, transfer pairing between own accounts, soft delete
 3. Payment calendar, cash-flow forecast and cost simulator
-4. C# API and mobile app
+4. Phone app (Android, .NET MAUI) over the home network: type entries, offline queue, no duplicates — see [docs/phase4.md](docs/phase4.md)
 
 > Category names and bank-statement patterns are in Portuguese on purpose: they are data from Brazilian banks.

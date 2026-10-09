@@ -17,6 +17,10 @@ Controle de fluxo de caixa pessoal para quem tem várias contas, cartões, bolet
 dotnet test
 ```
 
+## App do celular (Android)
+
+App em .NET MAUI para lançar gastos pelo celular, na rede de casa: o celular fala direto com o PC (o banco SQLite continua no PC, custo zero). Sem rede, os lançamentos ficam numa fila no celular e seguem sozinhos depois, sem duplicar. Passo a passo (chave, firewall, IP fixo, instalação) em [docs/phase4.md](docs/phase4.md).
+
 ## Importar a planilha
 
 Exporte a aba "Gastos" como CSV para a pasta `data/` (ignorada pelo git):
@@ -36,6 +40,8 @@ O cartão é cobrado pelo valor bruto, a conta recebe o líquido, e a diferença
 R$ 1.000 a 3,09% (1x): custo R$ 30,90, líquido R$ 969,10. A tabela de taxas por parcela (`CashAdvanceFeeTable`) já vem com as taxas de crédito da maquininha, de 1x a 12x (3,09% a 12,38%).
 
 ## Próximos passos
+
+- App do celular (feito, falta você compilar e testar): novo lançamento, últimos lançamentos e configurações; fila offline
 
 - Importação pela web (envio do CSV) e cadastro de categorias e regras
 - Cadastro de contas (limite, fechamento, vencimento)

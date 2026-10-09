@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="CashPilot.Mobile.Pages.SettingsPage"
+             Title="Configurações">
+    <ScrollView>
+        <VerticalStackLayout Padding="16" Spacing="10">
+            <Label Text="Configurações" FontSize="22" FontAttributes="Bold" />
+            <Label Text="Endereço do PC na rede de casa" />
+            <Entry x:Name="UrlEntry" Placeholder="http://192.168.0.10:5080" Keyboard="Url" />
+            <Label Text="Chave de API" />
+            <Entry x:Name="KeyEntry" IsPassword="True" Placeholder="a mesma configurada no PC" />
+            <Button Text="Salvar e testar conexão" Clicked="OnSaveAndTest" BackgroundColor="#0F766E" TextColor="White" />
+            <Label x:Name="StatusLabel" />
+            <Label TextColor="Gray" FontSize="12"
+                   Text="O celular só alcança o PC no Wi-Fi de casa. Fora de casa os lançamentos ficam guardados e seguem sozinhos quando você voltar." />
+        </VerticalStackLayout>
+    </ScrollView>
+</ContentPage>

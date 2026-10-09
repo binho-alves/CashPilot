@@ -9,5 +9,6 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\CashPilot.Domain\CashPilot.Domain.csproj" />
+    <ProjectReference Include="..\CashPilot.Contracts\CashPilot.Contracts.csproj" />
   </ItemGroup>
 </Project>

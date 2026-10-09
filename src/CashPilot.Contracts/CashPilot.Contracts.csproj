@@ -1,0 +1,3 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Shared by the API (Infrastructure/Web) and the mobile app: only plain records, no dependencies. -->
+</Project>
