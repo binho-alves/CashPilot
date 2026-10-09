@@ -22,6 +22,11 @@ public sealed record Account
     public int? ClosingDay { get; init; }
     public int? DueDay { get; init; }
 
+    /// <summary>Revolving credit interest of a card, percent per month (printed on the bill).</summary>
+    public decimal? RevolvingMonthlyRatePercent { get; init; }
+    /// <summary>Bill installment (parcelamento da fatura) interest of a card, percent per month, when it differs.</summary>
+    public decimal? InstallmentMonthlyRatePercent { get; init; }
+
     /// <summary>Overdraft (LIS) limit on a bank account.</summary>
     public decimal? OverdraftLimit { get; init; }
     /// <summary>Days of overdraft without interest.</summary>

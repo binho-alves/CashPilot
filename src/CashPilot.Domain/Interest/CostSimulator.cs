@@ -8,6 +8,7 @@ public enum FundingKind
     Overdraft = 1,
     CardCashOut = 2,
     LateBoleto = 3,
+    CardRevolving = 4,
 }
 
 /// <summary>
@@ -27,7 +28,7 @@ public sealed record FundingOption(
 /// "I need R$ X for N days: what is the cheapest way?" Compares the options whose terms are registered:
 /// overdraft (LIS) of each bank account that has a rate, and the card-terminal cash-out at 1x to 12x.
 /// A boleto whose multa and juros de mora are registered can also be left unpaid for a while (its extra cost is the
-/// option's cost). Revolving credit is not modelled yet (no rates registered).
+/// option's cost). Leaving part of a card bill unpaid (revolving credit, then bill installments) is compared for each card that has a revolving rate.
 /// </summary>
 public static class CostSimulator
 {
@@ -113,6 +114,25 @@ public static class CostSimulator
                 amount,
                 cashOut.Gross - amount,
                 true));
+        }
+
+        // Not paying part of a card bill: interest at the card's own rate plus IOF, capped at the amount itself.
+        foreach (var card in accounts.Where(a => a.Kind == AccountKind.CreditCard && a.RevolvingMonthlyRatePercent is not null))
+        {
+            var revolving = card.RevolvingMonthlyRatePercent!.Value;
+            var installment = card.InstallmentMonthlyRatePercent;
+            var cost = CardInterest.CarryCost(amount, days, revolving, installment);
+            var detail = days <= CardInterest.RevolvingMaxDays || installment is null
+                ? $"deixa R$ {amount:N2} da fatura sem pagar: rotativo {revolving:0.##}% ao mês + IOF"
+                : $"deixa R$ {amount:N2} da fatura sem pagar: passado o próximo vencimento vira parcelamento da fatura, {installment.Value:0.##}% ao mês + IOF";
+            options.Add(new FundingOption(
+                FundingKind.CardRevolving,
+                $"Rotativo {card.Name}",
+                detail,
+                amount,
+                cost,
+                true,
+                null));
         }
 
         // Leaving a boleto unpaid until the end of the period: only the extra late cost counts (a multa already

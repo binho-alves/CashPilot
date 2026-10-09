@@ -8,7 +8,7 @@
 <h1>Simulador de custo</h1>
 
 <section class="card-box wide">
-    <p class="muted">Quanto você precisa e por quantos dias? O app compara o LIS das suas contas, o saque na maquininha de 1x a 12x e atrasar algum boleto seu (se multa e juros dele estiverem cadastrados em <a href="pagar">Contas a pagar</a>).</p>
+    <p class="muted">Quanto você precisa e por quantos dias? O app compara o LIS das suas contas, o saque na maquininha de 1x a 12x o rotativo dos cartões e atrasar algum boleto seu (se multa e juros dele estiverem cadastrados em <a href="pagar">Contas a pagar</a>).</p>
     <div class="filters">
         <label>Preciso de (R$) <input @bind="_amountText" data-money="brl" inputmode="numeric" placeholder="R$ 1.000,00" /></label>
         <label>Por quantos dias <input type="number" min="1" max="365" @bind="_days" /></label>
@@ -51,7 +51,10 @@
             O saque na maquininha custa a taxa uma vez, independente dos dias, e o valor bruto vai para a fatura do cartão.
             Atrasar um boleto custa a multa mais os juros de mora pelos dias além do vencimento (só o que passa a ser cobrado por causa
             da sua escolha). Esse cálculo não considera protesto, negativação nem a chance de o beneficiário cobrar diferente do impresso:
-            confira o valor com o boleto atualizado. O rotativo do cartão ainda não entra: falta a taxa cadastrada.
+            confira o valor com o boleto atualizado. O rotativo vale para quem deixa parte da fatura de um cartão sem pagar: juros ao mês do próprio cartão (cadastrados em
+            <a href="contas">Contas</a>) mais IOF (0,38% + 0,0082% ao dia), nunca mais que o valor deixado de pagar. Só entram os cartões com taxa cadastrada,
+            e só faz sentido se a fatura tiver pelo menos esse valor a pagar. Até 30 dias vale o rotativo; depois do próximo vencimento o saldo vira
+            parcelamento da fatura.
         </p>
     </section>
 }

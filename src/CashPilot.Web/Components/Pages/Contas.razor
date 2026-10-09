@@ -1,5 +1,6 @@
 @page "/contas"
 @using CashPilot.Domain.Accounts
+@using CashPilot.Domain.Interest
 @inject CashPilotStore Store
 @inject ToastService Toasts
 
@@ -38,6 +39,8 @@
             <label>Limite (R$) <input @bind="_form.CreditLimit" data-money="brl" inputmode="numeric" placeholder="R$ 0,00" /></label>
             <label>Dia de fechamento <input type="number" min="1" max="31" @bind="_form.ClosingDay" /></label>
             <label>Dia de vencimento <input type="number" min="1" max="31" @bind="_form.DueDay" /></label>
+            <label>Rotativo (% ao mês) <input @bind="_form.RevolvingRate" data-money="percent" inputmode="numeric" placeholder="0,00" /></label>
+            <label>Parcelamento da fatura (% ao mês) <input @bind="_form.InstallmentRate" data-money="percent" inputmode="numeric" placeholder="0,00" /></label>
         }
         else if (_form.Kind == AccountKind.BankAccount)
         {
@@ -85,6 +88,15 @@
         </table>
     }
 
+    @if (_accounts.Any(a => a.Kind == AccountKind.CreditCard && a.RevolvingMonthlyRatePercent is null))
+    {
+        <p class="muted">
+            Há cartões sem a taxa do rotativo. As taxas conhecidas (de faturas de setembro/2026) podem ser preenchidas de uma vez; as marcadas
+            como estimadas valem 15% ou o chute do mesmo banco até você conferir na fatura.
+            <button @onclick="FillKnownRates">Preencher taxas conhecidas</button>
+        </p>
+    }
+
     @if (_unregistered.Count > 0)
     {
         <p class="muted">Nos lançamentos, ainda sem cadastro (clique para cadastrar):</p>
@@ -110,6 +122,8 @@
         public string OverdraftLimit { get; set; } = "";
         public int? OverdraftFreeDays { get; set; }
         public string OverdraftRate { get; set; } = "";
+        public string RevolvingRate { get; set; } = "";
+        public string InstallmentRate { get; set; } = "";
     }
 
     private Form _form = new();
@@ -147,6 +161,8 @@
         if (!TryMoney(_form.CreditLimit, out var creditLimit)) { _error = "Limite inválido."; return; }
         if (!TryMoney(_form.OverdraftLimit, out var overdraftLimit)) { _error = "Limite do LIS inválido."; return; }
         if (!TryMoney(_form.OverdraftRate, out var rate)) { _error = "Juros do LIS inválido."; return; }
+        if (!TryMoney(_form.RevolvingRate, out var revolvingRate)) { _error = "Taxa do rotativo inválida."; return; }
+        if (!TryMoney(_form.InstallmentRate, out var installmentRate)) { _error = "Taxa do parcelamento inválida."; return; }
         if (!ValidDay(_form.ClosingDay) || !ValidDay(_form.DueDay)) { _error = "Dias devem ficar entre 1 e 31."; return; }
 
         var card = _form.Kind == AccountKind.CreditCard;
@@ -172,6 +188,8 @@
             CreditLimit = card ? creditLimit : null,
             ClosingDay = card ? _form.ClosingDay : null,
             DueDay = card ? _form.DueDay : null,
+            RevolvingMonthlyRatePercent = card ? revolvingRate : null,
+            InstallmentMonthlyRatePercent = card ? installmentRate : null,
             OverdraftLimit = bank ? overdraftLimit : null,
             OverdraftFreeDays = bank ? _form.OverdraftFreeDays : null,
             OverdraftMonthlyRatePercent = bank ? rate : null,
@@ -196,6 +214,8 @@
             OverdraftLimit = account.OverdraftLimit is { } ol ? "R$ " + ol.ToString("N2", Br) : "",
             OverdraftFreeDays = account.OverdraftFreeDays,
             OverdraftRate = account.OverdraftMonthlyRatePercent?.ToString("N2", Br) ?? "",
+            RevolvingRate = account.RevolvingMonthlyRatePercent?.ToString("N2", Br) ?? "",
+            InstallmentRate = account.InstallmentMonthlyRatePercent?.ToString("N2", Br) ?? "",
         };
     }
 
@@ -210,6 +230,28 @@
                 ? AccountKind.CreditCard
                 : AccountKind.BankAccount,
         };
+    }
+
+    private void FillKnownRates()
+    {
+        var filled = 0;
+        var estimated = new List<string>();
+        foreach (var card in _accounts.Where(a => a.Kind == AccountKind.CreditCard && a.RevolvingMonthlyRatePercent is null))
+        {
+            var known = KnownCardRates.Find(card.Name);
+            if (known is null) continue;
+            Store.SaveAccount(card with
+            {
+                RevolvingMonthlyRatePercent = known.RevolvingPercent,
+                InstallmentMonthlyRatePercent = card.InstallmentMonthlyRatePercent ?? known.InstallmentPercent,
+            });
+            filled++;
+            if (known.Estimated) estimated.Add(card.Name);
+        }
+        Toasts.Success(filled == 0
+            ? "Nenhum cartão sem taxa foi reconhecido pelo nome."
+            : $"Taxas preenchidas em {filled} cartão(ões)." + (estimated.Count > 0 ? " Estimadas, confira na fatura: " + string.Join(", ", estimated) : ""));
+        Reload();
     }
 
     private void Cancel()
@@ -241,6 +283,8 @@
             a.CreditLimit is { } l ? $"limite R$ {l.ToString("N2", Br)}" : null,
             a.ClosingDay is { } c ? $"fecha dia {c}" : null,
             a.DueDay is { } d ? $"vence dia {d}" : null,
+            a.RevolvingMonthlyRatePercent is { } rv ? $"rotativo {rv.ToString("N2", Br)}% ao mês" : null,
+            a.InstallmentMonthlyRatePercent is { } iv ? $"parcelamento {iv.ToString("N2", Br)}% ao mês" : null,
         }.Where(x => x is not null)),
         AccountKind.BankAccount => string.Join(" · ", new[]
         {

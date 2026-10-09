@@ -114,6 +114,12 @@ internal static class Schema
         );
         CREATE INDEX ix_reimbursement_payments_pix ON reimbursement_payments (pix_id);
         """,
+
+        // v9: per-card revolving and bill-installment interest (percent per month, text to keep the decimals exact).
+        """
+        ALTER TABLE accounts ADD COLUMN revolving_monthly_rate   TEXT NULL;
+        ALTER TABLE accounts ADD COLUMN installment_monthly_rate TEXT NULL;
+        """,
     ];
 
     public static void Apply(SqliteConnection connection)

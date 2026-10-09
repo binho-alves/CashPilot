@@ -365,7 +365,8 @@ public sealed class CashPilotStore : IDisposable
         using var command = CreateCommand("""
             SELECT name, kind, credit_limit_cents, closing_day, due_day,
                    overdraft_limit_cents, overdraft_free_days, overdraft_monthly_rate,
-                   balance_anchor_cents, balance_anchor_date
+                   balance_anchor_cents, balance_anchor_date,
+                   revolving_monthly_rate, installment_monthly_rate
             FROM accounts ORDER BY kind, name;
             """);
         using var reader = command.ExecuteReader();
@@ -387,6 +388,12 @@ public sealed class CashPilotStore : IDisposable
                 BalanceAnchorDate = reader.IsDBNull(9)
                     ? null
                     : DateOnly.ParseExact(reader.GetString(9), "yyyy-MM-dd", CultureInfo.InvariantCulture),
+                RevolvingMonthlyRatePercent = reader.IsDBNull(10)
+                    ? null
+                    : decimal.Parse(reader.GetString(10), CultureInfo.InvariantCulture),
+                InstallmentMonthlyRatePercent = reader.IsDBNull(11)
+                    ? null
+                    : decimal.Parse(reader.GetString(11), CultureInfo.InvariantCulture),
             });
         }
         return result;
@@ -399,8 +406,9 @@ public sealed class CashPilotStore : IDisposable
 
         using var command = CreateCommand("""
             INSERT INTO accounts (name, kind, credit_limit_cents, closing_day, due_day,
-                                  overdraft_limit_cents, overdraft_free_days, overdraft_monthly_rate)
-            VALUES ($name, $kind, $limit, $closing, $due, $odLimit, $odDays, $odRate)
+                                  overdraft_limit_cents, overdraft_free_days, overdraft_monthly_rate,
+                                  revolving_monthly_rate, installment_monthly_rate)
+            VALUES ($name, $kind, $limit, $closing, $due, $odLimit, $odDays, $odRate, $revRate, $instRate)
             ON CONFLICT (name) DO UPDATE SET
                 kind = excluded.kind,
                 credit_limit_cents = excluded.credit_limit_cents,
@@ -408,9 +416,17 @@ public sealed class CashPilotStore : IDisposable
                 due_day = excluded.due_day,
                 overdraft_limit_cents = excluded.overdraft_limit_cents,
                 overdraft_free_days = excluded.overdraft_free_days,
-                overdraft_monthly_rate = excluded.overdraft_monthly_rate;
+                overdraft_monthly_rate = excluded.overdraft_monthly_rate,
+                revolving_monthly_rate = excluded.revolving_monthly_rate,
+                installment_monthly_rate = excluded.installment_monthly_rate;
             """);
         command.Parameters.AddWithValue("$name", account.Name.Trim());
+        command.Parameters.AddWithValue("$revRate", account.RevolvingMonthlyRatePercent is { } rv
+            ? (object)rv.ToString(CultureInfo.InvariantCulture)
+            : DBNull.Value);
+        command.Parameters.AddWithValue("$instRate", account.InstallmentMonthlyRatePercent is { } iv
+            ? (object)iv.ToString(CultureInfo.InvariantCulture)
+            : DBNull.Value);
         command.Parameters.AddWithValue("$kind", (int)account.Kind);
         command.Parameters.AddWithValue("$limit", account.CreditLimit is { } l ? (object)ToCents(l) : DBNull.Value);
         command.Parameters.AddWithValue("$closing", account.ClosingDay is { } c ? (object)c : DBNull.Value);

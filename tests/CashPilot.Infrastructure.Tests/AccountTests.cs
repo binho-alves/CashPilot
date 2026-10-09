@@ -7,6 +7,32 @@ namespace CashPilot.Infrastructure.Tests;
 public class AccountTests
 {
     [Fact]
+    public void CardRatesRoundTripAndAreKeptWhenOtherFieldsChange()
+    {
+        using var store = new CashPilotStore(":memory:");
+        store.SaveAccount(new Account
+        {
+            Name = "Cartão Exemplo",
+            Kind = AccountKind.CreditCard,
+            CreditLimit = 1000m,
+            RevolvingMonthlyRatePercent = 16.10m,
+            InstallmentMonthlyRatePercent = 10.5m,
+        });
+
+        var card = store.GetAccounts().Single();
+        Assert.Equal(16.10m, card.RevolvingMonthlyRatePercent);
+        Assert.Equal(10.5m, card.InstallmentMonthlyRatePercent);
+
+        store.SaveAccount(card with { CreditLimit = 2000m });
+        Assert.Equal(16.10m, store.GetAccounts().Single().RevolvingMonthlyRatePercent);
+
+        store.SaveAccount(card with { RevolvingMonthlyRatePercent = null, InstallmentMonthlyRatePercent = null });
+        var cleared = store.GetAccounts().Single();
+        Assert.Null(cleared.RevolvingMonthlyRatePercent);
+        Assert.Null(cleared.InstallmentMonthlyRatePercent);
+    }
+
+    [Fact]
     public void AccountsRoundTripAndUpdateByName()
     {
         using var store = new CashPilotStore(":memory:");
