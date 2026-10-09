@@ -30,9 +30,9 @@
         <label>Descrição <input @bind="_newDescription" placeholder="ex.: Padaria" /></label>
         <label>Valor (R$) <input @bind="_newAmount" data-money="brl" inputmode="numeric" placeholder="R$ 0,00" /></label>
         <label>Tipo
-            <select @bind="_newIncome">
-                <option value="@false">Gasto</option>
-                <option value="@true">Receita</option>
+            <select @bind="_newKind">
+                <option value="expense">Gasto</option>
+                <option value="income">Receita</option>
             </select>
         </label>
         <label>Categoria (opcional) <input list="dl-categories" @bind="_newCategory" placeholder="deixe em branco para o app tentar" /></label>
@@ -178,7 +178,10 @@
     private string _newAccount = "";
     private string _newDescription = "";
     private string _newAmount = "";
-    private bool _newIncome;
+    // Text values on purpose: Blazor drops an attribute rendered from a bool "false" and renders "true" without a value,
+    // so a bool-valued <option> never told "Receita" from "Gasto".
+    private string _newKind = "expense";
+    private bool _newIncome => _newKind == "income";
     private string _newCategory = "";
     private string _newItem = "";
     private string? _newError;

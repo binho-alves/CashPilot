@@ -58,6 +58,16 @@ public sealed record ReimbursementClaim(
 public sealed record ReimbursementTotals(
     int OpenCount, int LateCount, decimal Waiting, decimal Paid, decimal Received, decimal FinalDifference);
 
+/// <summary>Claims of one month (the month of the expense): what was paid, what came back and what is still open.</summary>
+public sealed record ReimbursementMonth(int Year, int Month, int Claims, decimal Paid, decimal Received, decimal Waiting, decimal Lost)
+{
+    /// <summary>What the month really cost so far: paid minus received (still counts what is waiting).</summary>
+    public decimal NetCost => Paid - Received;
+
+    /// <summary>Share of the paid amount that came back, 0 to 1.</summary>
+    public decimal? ReimbursedFraction => Paid > 0 ? Received / Paid : null;
+}
+
 public sealed record AllocationSuggestion(IReadOnlyList<Allocation> Items, bool Exact);
 
 public static class ReimbursementRules
@@ -81,6 +91,20 @@ public static class ReimbursementRules
             // Cost that will not come back: claims already settled (zero) or closed with something missing.
             list.Where(c => !c.IsOpen).Sum(c => c.Difference));
     }
+
+    /// <summary>By month of the expense, newest first. <c>Waiting</c> is what open claims still expect; <c>Lost</c> is what
+    /// settled or closed claims did not get back.</summary>
+    public static IReadOnlyList<ReimbursementMonth> ByMonth(IEnumerable<ReimbursementClaim> claims) =>
+        claims
+            .GroupBy(c => (c.Expense.Date.Year, c.Expense.Date.Month))
+            .OrderByDescending(g => g.Key.Year).ThenByDescending(g => g.Key.Month)
+            .Select(g => new ReimbursementMonth(
+                g.Key.Year, g.Key.Month, g.Count(),
+                g.Sum(c => c.Paid),
+                g.Sum(c => c.Received),
+                g.Where(c => c.IsOpen).Sum(c => c.Remaining),
+                g.Where(c => !c.IsOpen).Sum(c => c.Difference)))
+            .ToList();
 
     /// <summary>
     /// Suggests how a Pix of <paramref name="pixAmount"/> splits over the open claims. First looks for the smallest

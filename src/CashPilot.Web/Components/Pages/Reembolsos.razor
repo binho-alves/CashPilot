@@ -38,8 +38,6 @@
 </div>
 
 <h2>Pedidos</h2>
-<label class="check"><input type="checkbox" @bind="_showClosed" /> Mostrar também os já recebidos e encerrados</label>
-
 <table class="grid">
     <thead>
         <tr>
@@ -93,6 +91,72 @@
     “Pediram documentos” reinicia o prazo de 30 dias a partir de hoje.
 </p>
 
+<h2>Histórico por mês</h2>
+<p class="muted">Pelo mês do gasto: quanto você pagou, quanto o plano já devolveu, quanto ainda espera e quanto ficou sem devolução. O mês do Pix só muda o relatório de gastos (Resumo, Comparativo, Orçamento), não esta tabela.</p>
+<table class="grid">
+    <thead>
+        <tr>
+            <th>Mês do gasto</th><th class="num">Pedidos</th><th class="num">Pago</th><th class="num">Reembolsado</th>
+            <th class="num">Aguardando</th><th class="num">Não devolvido</th><th class="num">Custo líquido</th><th class="num">% devolvido</th>
+        </tr>
+    </thead>
+    <tbody>
+        @foreach (var month in _months)
+        {
+            <tr @key="(month.Year * 100 + month.Month)">
+                <td>@MonthNames[month.Month - 1] de @month.Year</td>
+                <td class="num">@month.Claims</td>
+                <td class="num">@Money(month.Paid)</td>
+                <td class="num">@Money(month.Received)</td>
+                <td class="num">@(month.Waiting > 0 ? Money(month.Waiting) : "")</td>
+                <td class="num @(month.Lost > 0 ? "neg" : "")">@(month.Lost > 0 ? Money(month.Lost) : "")</td>
+                <td class="num">@Money(month.NetCost)</td>
+                <td class="num">@(month.ReimbursedFraction is { } f ? f.ToString("P0", Br) : "")</td>
+            </tr>
+        }
+        @if (_months.Count == 0)
+        {
+            <tr><td colspan="8" class="muted">Ainda não há pedidos.</td></tr>
+        }
+    </tbody>
+</table>
+<p class="muted">Custo líquido = pago − reembolsado. Enquanto há valor aguardando, ele ainda pode cair.</p>
+
+<h2>Recebidos e encerrados</h2>
+<table class="grid">
+    <thead>
+        <tr><th>Gasto</th><th class="num">Pago</th><th class="num">Reembolsado</th><th class="num">Custo real</th><th>Pix que pagaram</th><th>Situação</th><th></th></tr>
+    </thead>
+    <tbody>
+        @foreach (var claim in _history)
+        {
+            <tr @key="claim.Id">
+                <td>@claim.Expense.Date.ToString("dd/MM/yyyy") — @claim.Expense.RawDescription
+                    <span class="muted">@claim.Expense.Account@(claim.Expense.Category is { } c ? " · " + c : "")</span></td>
+                <td class="num">@Money(claim.Paid)</td>
+                <td class="num">@Money(claim.Received)</td>
+                <td class="num @(claim.Difference > 0 ? "neg" : "")">@Money(claim.Difference)</td>
+                <td>
+                    @foreach (var payment in claim.Payments.OrderBy(p => PixDate(p.PixId)))
+                    {
+                        <div>@PixLabel(payment.PixId): @Money(payment.Amount)
+                            <button class="link" @onclick="() => Unlink(claim.Id, payment.PixId)">desligar</button></div>
+                    }
+                </td>
+                <td>@StatusText(claim)</td>
+                <td class="actions">
+                    @if (!claim.Settled) { <button @onclick="() => Reopen(claim.Id)">Reabrir</button> }
+                    <button class="link" @onclick="() => Remove(claim.Id)">Remover pedido</button>
+                </td>
+            </tr>
+        }
+        @if (_history.Count == 0)
+        {
+            <tr><td colspan="7" class="muted">Nenhum pedido recebido ou encerrado ainda.</td></tr>
+        }
+    </tbody>
+</table>
+
 <section class="card-box wide">
     <h2>Ligar um Pix recebido</h2>
     <p class="muted">Escolha o Pix do plano e marque os pedidos que ele pagou. Já sugiro a combinação que soma o valor do Pix.</p>
@@ -125,7 +189,7 @@
         <h3>Pix de @Money(selected.Free) para distribuir</h3>
         @if (_openClaims.Count == 0)
         {
-            <p class="muted">Não há pedidos em aberto.</p>
+            <p class="muted">Não há pedidos em aberto para ligar a este Pix. Primeiro registre o pedido do gasto em “Novo pedido”, mais abaixo, e depois volte aqui.</p>
         }
         else
         {
@@ -194,11 +258,12 @@
 
     private IReadOnlyList<ReimbursementClaim> _claims = Array.Empty<ReimbursementClaim>();
     private IReadOnlyList<ReimbursementClaim> _openClaims = Array.Empty<ReimbursementClaim>();
+    private IReadOnlyList<ReimbursementClaim> _history = Array.Empty<ReimbursementClaim>();
+    private IReadOnlyList<ReimbursementMonth> _months = Array.Empty<ReimbursementMonth>();
     private IReadOnlyList<Transaction> _all = Array.Empty<Transaction>();
     private ReimbursementTotals _totals = new(0, 0, 0m, 0m, 0m, 0m);
     private string? _error;
 
-    private bool _showClosed;
     private string _pixFilter = "";
     private string _expenseFilter = "";
     private bool _onlyHealth = true;
@@ -218,11 +283,12 @@
         _claims = Store.GetReimbursementClaims();
         _all = Store.GetAll();
         _openClaims = _claims.Where(c => c.IsOpen).ToList();
+        _history = _claims.Where(c => !c.IsOpen).OrderByDescending(c => c.Expense.Date).ToList();
+        _months = ReimbursementRules.ByMonth(_claims);
         _totals = ReimbursementRules.Summarize(_claims, Today);
     }
 
-    private IEnumerable<ReimbursementClaim> VisibleClaims =>
-        (_showClosed ? _claims : _openClaims).OrderByDescending(c => c.IsOpen).ThenBy(c => c.ExpectedOn);
+    private IEnumerable<ReimbursementClaim> VisibleClaims => _openClaims.OrderBy(c => c.ExpectedOn);
 
     private Dictionary<Guid, decimal> AllocatedByPix =>
         _claims.SelectMany(c => c.Payments).GroupBy(p => p.PixId).ToDictionary(g => g.Key, g => g.Sum(p => p.Amount));
@@ -264,6 +330,15 @@
     }
 
     private static bool SpendingReportCounts(Transaction t) => t.Type is TransactionType.Expense or TransactionType.Undefined;
+
+    private static readonly string[] MonthNames =
+    {
+        "janeiro", "fevereiro", "março", "abril", "maio", "junho",
+        "julho", "agosto", "setembro", "outubro", "novembro", "dezembro",
+    };
+
+    private DateOnly PixDate(Guid pixId) =>
+        _all.FirstOrDefault(t => t.Id == pixId)?.Date ?? DateOnly.MinValue;
 
     private string PixLabel(Guid pixId) =>
         _all.FirstOrDefault(t => t.Id == pixId) is { } pix ? pix.Date.ToString("dd/MM/yyyy") : "?";

@@ -178,4 +178,35 @@ public class ReimbursementTests
 
         Assert.Equal(80m, items.Single(i => i.Kind == UpcomingKind.ExpectedReimbursement).Amount);
     }
+
+    [Fact]
+    public void Months_group_by_the_month_of_the_expense_newest_first()
+    {
+        var months = ReimbursementRules.ByMonth(
+        [
+            Claim(200m, requested: "2026-09-01", received: 200m),                          // settled
+            Claim(100m, requested: "2026-09-10", received: 60m, status: ClaimStatus.Closed), // closed, lost 40
+            Claim(150m, requested: "2026-09-20", received: 50m),                           // open, waiting 100
+            Claim(80m, requested: "2026-10-02"),                                           // open, waiting 80
+        ]);
+
+        Assert.Equal(2, months.Count);
+        Assert.Equal((2026, 10), (months[0].Year, months[0].Month));
+        Assert.Equal(80m, months[0].Waiting);
+
+        var september = months[1];
+        Assert.Equal(3, september.Claims);
+        Assert.Equal(450m, september.Paid);
+        Assert.Equal(310m, september.Received);
+        Assert.Equal(100m, september.Waiting);
+        Assert.Equal(40m, september.Lost);
+        Assert.Equal(140m, september.NetCost);
+        Assert.Equal(310m / 450m, september.ReimbursedFraction);
+    }
+
+    [Fact]
+    public void Months_without_claims_give_an_empty_list()
+    {
+        Assert.Empty(ReimbursementRules.ByMonth([]));
+    }
 }
