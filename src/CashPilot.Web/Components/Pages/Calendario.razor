@@ -145,9 +145,11 @@
         var payables = Store.GetPayables();
         var settlements = Store.GetCardBillSettlements();
         var until = Today.AddDays(365);
-        _basic = PaymentSchedule.Build(accounts, transactions, payables, Today, settlements);
+        var links = Store.GetCardBillLinks();
+        var adjustments = Store.GetCardBillAdjustments();
+        _basic = PaymentSchedule.Build(accounts, transactions, payables, Today, settlements, links, adjustments);
         _withForecast = CashForecast.Build(accounts, transactions, payables, Today, until, settlements,
-            reimbursements: Store.GetReimbursementClaims());
+            reimbursements: Store.GetReimbursementClaims(), cardBillLinks: links, cardBillAdjustments: adjustments);
     }
 
     private static string Tag(UpcomingPayment item) =>

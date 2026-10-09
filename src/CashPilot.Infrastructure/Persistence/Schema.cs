@@ -120,6 +120,29 @@ internal static class Schema
         ALTER TABLE accounts ADD COLUMN revolving_monthly_rate   TEXT NULL;
         ALTER TABLE accounts ADD COLUMN installment_monthly_rate TEXT NULL;
         """,
+
+        // v10: bill payments linked by hand to a card bill (card + closing date), with the amount applied (cents).
+        // A payment entry can pay several bills and a bill can get several payments.
+        """
+        CREATE TABLE card_bill_payments (
+            transaction_id TEXT    NOT NULL,
+            card           TEXT    NOT NULL,
+            closing        TEXT    NOT NULL,
+            amount_cents   INTEGER NOT NULL,
+            PRIMARY KEY (transaction_id, card, closing)
+        );
+        CREATE INDEX ix_card_bill_payments_bill ON card_bill_payments (card, closing);
+        """,
+
+        // v11: hand-set difference (cents, may be negative) added to a card bill's total to match the bank's figure.
+        """
+        CREATE TABLE card_bill_adjustments (
+            card         TEXT    NOT NULL,
+            closing      TEXT    NOT NULL,
+            amount_cents INTEGER NOT NULL,
+            PRIMARY KEY (card, closing)
+        );
+        """,
     ];
 
     public static void Apply(SqliteConnection connection)

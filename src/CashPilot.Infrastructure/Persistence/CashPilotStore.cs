@@ -524,6 +524,99 @@ public sealed class CashPilotStore : IDisposable
         return result;
     }
 
+    public IReadOnlyList<CardBillPaymentLink> GetCardBillLinks()
+    {
+        var result = new List<CardBillPaymentLink>();
+        using var command = CreateCommand("SELECT transaction_id, card, closing, amount_cents FROM card_bill_payments;");
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            result.Add(new CardBillPaymentLink(
+                Guid.Parse(reader.GetString(0)),
+                reader.GetString(1),
+                DateOnly.ParseExact(reader.GetString(2), "yyyy-MM-dd", CultureInfo.InvariantCulture),
+                FromCents(reader.GetInt64(3))));
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Applies <paramref name="amount"/> of a bill payment entry to the bill of <paramref name="card"/> that closes on
+    /// <paramref name="closing"/> (added to what was already applied there). The entry must be a bill payment and the
+    /// total applied from it cannot exceed its amount.
+    /// </summary>
+    public void LinkCardBillPayment(Guid transactionId, string card, DateOnly closing, decimal amount)
+    {
+        if (amount <= 0m) throw new ArgumentException("O valor deve ser maior que zero.", nameof(amount));
+        var payment = GetAll().FirstOrDefault(t => t.Id == transactionId);
+        if (payment is null || payment.Type != TransactionType.CardBillPayment)
+            throw new ArgumentException("O lançamento não é um pagamento de fatura.", nameof(transactionId));
+
+        var alreadyApplied = GetCardBillLinks().Where(l => l.TransactionId == transactionId).Sum(l => l.Amount);
+        if (alreadyApplied + amount > Math.Abs(payment.Amount) + 0.005m)
+            throw new ArgumentException("Mais do que sobra desse pagamento.", nameof(amount));
+
+        using var command = CreateCommand("""
+            INSERT INTO card_bill_payments (transaction_id, card, closing, amount_cents)
+            VALUES ($tx, $card, $closing, $cents)
+            ON CONFLICT (transaction_id, card, closing) DO UPDATE SET amount_cents = amount_cents + excluded.amount_cents;
+            """);
+        command.Parameters.AddWithValue("$tx", transactionId.ToString());
+        command.Parameters.AddWithValue("$card", card);
+        command.Parameters.AddWithValue("$closing", closing.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+        command.Parameters.AddWithValue("$cents", ToCents(amount));
+        command.ExecuteNonQuery();
+    }
+
+    /// <summary>Takes a payment off a bill. The payment entry itself stays.</summary>
+    public bool UnlinkCardBillPayment(Guid transactionId, string card, DateOnly closing)
+    {
+        using var command = CreateCommand(
+            "DELETE FROM card_bill_payments WHERE transaction_id = $tx AND card = $card AND closing = $closing;");
+        command.Parameters.AddWithValue("$tx", transactionId.ToString());
+        command.Parameters.AddWithValue("$card", card);
+        command.Parameters.AddWithValue("$closing", closing.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+        return command.ExecuteNonQuery() > 0;
+    }
+
+    public IReadOnlyList<CardBillAdjustment> GetCardBillAdjustments()
+    {
+        var result = new List<CardBillAdjustment>();
+        using var command = CreateCommand("SELECT card, closing, amount_cents FROM card_bill_adjustments;");
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            result.Add(new CardBillAdjustment(
+                reader.GetString(0),
+                DateOnly.ParseExact(reader.GetString(1), "yyyy-MM-dd", CultureInfo.InvariantCulture),
+                FromCents(reader.GetInt64(2))));
+        }
+        return result;
+    }
+
+    /// <summary>Sets the hand-made difference of a bill's total (zero removes it). Not an entry: reports never see it.</summary>
+    public void SetCardBillAdjustment(string card, DateOnly closing, decimal amount)
+    {
+        var key = closing.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        if (ToCents(amount) == 0)
+        {
+            using var delete = CreateCommand("DELETE FROM card_bill_adjustments WHERE card = $card AND closing = $closing;");
+            delete.Parameters.AddWithValue("$card", card);
+            delete.Parameters.AddWithValue("$closing", key);
+            delete.ExecuteNonQuery();
+            return;
+        }
+
+        using var command = CreateCommand("""
+            INSERT INTO card_bill_adjustments (card, closing, amount_cents) VALUES ($card, $closing, $cents)
+            ON CONFLICT (card, closing) DO UPDATE SET amount_cents = excluded.amount_cents;
+            """);
+        command.Parameters.AddWithValue("$card", card);
+        command.Parameters.AddWithValue("$closing", key);
+        command.Parameters.AddWithValue("$cents", ToCents(amount));
+        command.ExecuteNonQuery();
+    }
+
     /// <summary>Marks the bill of <paramref name="card"/> that closes on <paramref name="closing"/> as paid by hand.</summary>
     public void SetCardBillSettled(string card, DateOnly closing, DateOnly paidOn)
     {
@@ -801,6 +894,16 @@ public sealed class CashPilotStore : IDisposable
             settlements.Parameters.AddWithValue("$to", to);
             settlements.Parameters.AddWithValue("$from", from);
             settlements.ExecuteNonQuery();
+
+            using var billPayments = CreateCommand("UPDATE card_bill_payments SET card = $to WHERE card = $from;");
+            billPayments.Parameters.AddWithValue("$to", to);
+            billPayments.Parameters.AddWithValue("$from", from);
+            billPayments.ExecuteNonQuery();
+
+            using var adjustments = CreateCommand("UPDATE card_bill_adjustments SET card = $to WHERE card = $from;");
+            adjustments.Parameters.AddWithValue("$to", to);
+            adjustments.Parameters.AddWithValue("$from", from);
+            adjustments.ExecuteNonQuery();
         });
         return found;
     }

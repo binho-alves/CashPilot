@@ -8,6 +8,7 @@ Controle de fluxo de caixa pessoal para quem tem várias contas, cartões, bolet
 - Classificador que **aprende** com as suas correções.
 - Pix entre contas próprias e pagamento de fatura **não** contam como gasto.
 - Juros agrupados em "Juros e encargos" por tipo: cheque especial, atraso de boleto, atraso de cartão, saque na maquininha e tarifas.
+- Faturas dos cartões: total, pago e o que falta de cada fatura; os pagamentos são ligados à fatura de cada cartão, inclusive pagamento parcial.
 - Calendário de pagamentos, limites de contas e cartões e simulador de juros.
 
 ## Rodar

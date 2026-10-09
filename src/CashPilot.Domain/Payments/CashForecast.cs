@@ -37,11 +37,13 @@ public static class CashForecast
         DateOnly until,
         IEnumerable<CardBillSettlement>? settlements = null,
         bool includeIncome = true,
-        IEnumerable<ReimbursementClaim>? reimbursements = null)
+        IEnumerable<ReimbursementClaim>? reimbursements = null,
+        IEnumerable<CardBillPaymentLink>? cardBillLinks = null,
+        IEnumerable<CardBillAdjustment>? cardBillAdjustments = null)
     {
         var accountList = accounts.ToList();
         var all = transactions.ToList();
-        var items = PaymentSchedule.Build(accountList, all, payables, today, settlements).ToList();
+        var items = PaymentSchedule.Build(accountList, all, payables, today, settlements, cardBillLinks, cardBillAdjustments).ToList();
 
         var cards = accountList
             .Where(a => a.Kind == AccountKind.CreditCard && a.ClosingDay is not null && a.DueDay is not null)

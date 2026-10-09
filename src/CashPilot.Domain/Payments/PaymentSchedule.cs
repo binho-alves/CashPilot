@@ -39,7 +39,7 @@ public static class PaymentSchedule
     /// <list type="bullet">
     /// <item>card bills: entries on registered cards with closing and due days, grouped by cycle, bills due today or later
     /// (the gross cash-out charge counts, bill payments do not) that no payment was found for
-    /// (see <see cref="CardBillMatcher"/>: a bill already paid early, or marked as paid by hand, is not listed);</item>
+    /// (see <see cref="CardBillLedger"/>: a bill already paid, early or by links, or marked as paid by hand, is not listed; one paid in part lists what is left);</item>
     /// <item>unpaid hand-registered payables, overdue ones included;</item>
     /// <item>entries dated in the future on any other account (installments, scheduled boletos).</item>
     /// </list>
@@ -49,7 +49,9 @@ public static class PaymentSchedule
         IEnumerable<Transaction> transactions,
         IEnumerable<Payable> payables,
         DateOnly today,
-        IEnumerable<CardBillSettlement>? settlements = null)
+        IEnumerable<CardBillSettlement>? settlements = null,
+        IEnumerable<CardBillPaymentLink>? cardBillLinks = null,
+        IEnumerable<CardBillAdjustment>? cardBillAdjustments = null)
     {
         var result = new List<UpcomingPayment>();
         var all = transactions.ToList();
@@ -60,11 +62,13 @@ public static class PaymentSchedule
             .Select(a => a.Name)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var bill in CardBillMatcher.Match(accountList, all, settlements).Cycles)
+        foreach (var bill in CardBillLedger.Build(accountList, all, settlements, cardBillLinks, today, cardBillAdjustments).Statements)
         {
-            if (bill.Due < today || bill.Paid) continue;
+            if (bill.Due < today || bill.IsPaid) continue;
+            // A bill paid in part is still due for what is left.
             result.Add(new UpcomingPayment(UpcomingKind.CardBill,
-                $"Fatura {bill.Card.Name} (fecha {bill.Closing:dd/MM})", bill.Due, bill.Total, bill.Card.Name, null, false, bill.Closing));
+                $"Fatura {bill.Card.Name} (fecha {bill.Closing:dd/MM})" + (bill.Paid > 0m ? " — restante" : ""),
+                bill.Due, bill.Remaining, bill.Card.Name, null, false, bill.Closing));
         }
 
         foreach (var payable in payables.Where(p => !p.Paid))

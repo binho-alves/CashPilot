@@ -16,6 +16,11 @@ public static class ManualEntries
     /// <param name="amount">Always positive; <paramref name="income"/> decides the sign.</param>
     /// <param name="chosen">The category the user picked; when null the classifier tries, and an unknown entry stays pending.</param>
     /// <param name="learn">With a chosen category: also teach it as the rule for this description.</param>
+    /// <param name="type">
+    /// Null for a normal expense/income. <see cref="TransactionType.CardBillPayment"/> (paying a card bill from a bank
+    /// account, an outflow) and <see cref="TransactionType.InternalTransfer"/> (between own accounts, either side) are
+    /// neither spending nor income, so they are never classified and teach nothing.
+    /// </param>
     public static ManualEntryResult Add(
         CashPilotStore store,
         DateOnly date,
@@ -24,8 +29,14 @@ public static class ManualEntries
         decimal amount,
         bool income,
         Classification? chosen = null,
-        bool learn = true)
+        bool learn = true,
+        TransactionType? type = null)
     {
+        if (type is not (null or TransactionType.Expense or TransactionType.Income
+                or TransactionType.CardBillPayment or TransactionType.InternalTransfer))
+            throw new ArgumentException("Tipo de lançamento não permitido.", nameof(type));
+        var neutral = type is TransactionType.CardBillPayment or TransactionType.InternalTransfer;
+
         account = (account ?? "").Trim();
         description = string.Join(' ', (description ?? "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
         if (account.Length == 0) throw new ArgumentException("Informe a conta.", nameof(account));
@@ -38,11 +49,15 @@ public static class ManualEntries
             Date = date,
             Amount = income ? amount : -amount,
             RawDescription = description,
-            Type = income ? TransactionType.Income : TransactionType.Expense,
+            Type = neutral ? type!.Value : income ? TransactionType.Income : TransactionType.Expense,
         };
 
         var auto = false;
-        if (chosen is { } picked && picked.Category.Trim().Length > 0)
+        if (neutral)
+        {
+            // Not spending and not income: no category, nothing to learn.
+        }
+        else if (chosen is { } picked && picked.Category.Trim().Length > 0)
         {
             transaction = WithClassification(transaction, new Classification(picked.Category.Trim(), picked.Item?.Trim() ?? ""));
         }

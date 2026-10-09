@@ -10,6 +10,7 @@ Personal cash-flow control for people juggling several bank accounts, credit car
 - A classifier that **learns**: it categorizes by description, asks only when unsure, and remembers the answer.
 - Pix/TED between your own accounts and credit card bill payments are **not** counted as spending.
 - All interest rolled up as "Juros e encargos" with a type: overdraft, late boleto, late card payment, card cash-out fee, bank fees.
+- Card bills: total, paid and remaining per bill; payments are linked to each card's bill, partial payments included.
 - Payment calendar, account/card limits, and an interest simulator that compares ways to raise cash (overdraft, terminal cash-out, late boleto, card revolving with each card's own rate).
 
 ## Structure

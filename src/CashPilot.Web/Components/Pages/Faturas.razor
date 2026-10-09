@@ -1,0 +1,370 @@
+@page "/faturas"
+@using CashPilot.Domain.Accounts
+@using CashPilot.Domain.Payments
+@using CashPilot.Domain.Transactions
+@inject CashPilotStore Store
+@inject ToastService Toasts
+
+<PageTitle>Faturas — CashPilot</PageTitle>
+
+<h1>Faturas dos cartões</h1>
+
+<p class="muted">
+    Cada fatura de cada cartão, com o que já foi pago e o que falta. Para dar baixa, ligue à fatura um pagamento que já está nos seus lançamentos
+    (tipo "Pagamento de fatura"): um pagamento pode quitar mais de uma fatura e uma fatura pode receber mais de um pagamento (pagamento parcial).
+    Se o pagamento ainda não está lançado, crie em <a href="lancamentos">Lançamentos</a> com o tipo "Pagamento de fatura (saiu da conta)" e volte aqui.
+</p>
+
+<div class="cards">
+    <div class="card"><span class="muted">Falta pagar (faturas fechadas)</span><strong>@Money(_toPay)</strong></div>
+    <div class="card @(_overdue > 0 ? "warn" : "")"><span class="muted">Vencidas</span><strong>@Money(_overdue)</strong></div>
+    <div class="card"><span class="muted">Vencem em 30 dias</span><strong>@Money(_next30)</strong></div>
+    <div class="card"><span class="muted">Ainda abertas (acumulando)</span><strong>@Money(_openTotal)</strong></div>
+</div>
+
+<div class="filters">
+    <label>Cartão
+        <select @bind="_card">
+            <option value="">Todos</option>
+            @foreach (var name in _cardNames)
+            {
+                <option value="@name">@name</option>
+            }
+        </select>
+    </label>
+    <label><input type="checkbox" @bind="_showPaid" /> Mostrar faturas pagas</label>
+</div>
+
+@if (Shown.Count == 0)
+{
+    <p class="muted">Nenhuma fatura para mostrar. Cadastre os cartões com dia de fechamento e vencimento em <a href="contas">Contas</a>.</p>
+}
+else
+{
+    <table class="grid">
+        <thead>
+            <tr>
+                <th>Cartão</th><th>Fecha</th><th>Vence</th>
+                <th class="num">Total</th><th class="num">Pago</th><th class="num">Falta</th>
+                <th>Situação</th><th></th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var bill in Shown)
+            {
+                var key = Key(bill);
+                <tr @key="key" class="@(_open == key ? "selected" : "")">
+                    <td>@bill.Card.Name</td>
+                    <td>@bill.Closing.ToString("dd/MM/yyyy")</td>
+                    <td>@bill.Due.ToString("dd/MM/yyyy")</td>
+                    <td class="num">@Money(bill.Total)</td>
+                    <td class="num">@Money(bill.Paid)</td>
+                    <td class="num @(bill.State == CardBillState.Overdue ? "neg" : "")">@Money(bill.Remaining)</td>
+                    <td class="@(bill.State == CardBillState.Overdue ? "neg" : "")">@StateText(bill)</td>
+                    <td class="actions"><button @onclick="() => Toggle(key)">@(_open == key ? "Fechar" : "Detalhes")</button></td>
+                </tr>
+                @if (_open == key)
+                {
+                    <tr>
+                        <td colspan="8">
+                            <h3>Pagamentos desta fatura</h3>
+                            @if (bill.SettledByHand is { } settled)
+                            {
+                                <p>Marcada como paga por você em @settled.ToString("dd/MM/yyyy"). <button @onclick="() => Unsettle(bill)">Desfazer marcação</button></p>
+                            }
+                            @if (bill.Parts.Count == 0)
+                            {
+                                <p class="muted">Nenhum pagamento ligado ainda.</p>
+                            }
+                            else
+                            {
+                                <table class="grid">
+                                    <thead><tr><th>Data</th><th>Conta</th><th>Descrição</th><th class="num">Aplicado na fatura</th><th></th></tr></thead>
+                                    <tbody>
+                                        @foreach (var part in bill.Parts)
+                                        {
+                                            <tr>
+                                                <td>@part.Payment.Date.ToString("dd/MM/yyyy")</td>
+                                                <td>@part.Payment.Account</td>
+                                                <td>@part.Payment.RawDescription</td>
+                                                <td class="num">@Money(part.Amount)</td>
+                                                <td class="actions">
+                                                    @if (part.Manual)
+                                                    {
+                                                        <button @onclick="() => Unlink(part.Payment.Id, bill)">Desligar</button>
+                                                    }
+                                                    else
+                                                    {
+                                                        <span class="muted">achado pelo valor e pela data</span>
+                                                    }
+                                                </td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            }
+
+                            <h3>Ajuste de centavos</h3>
+                            <p class="muted">
+                                Total pelos lançamentos: @Money(bill.EntriesTotal)@(bill.Adjustment != 0m ? " · ajuste: " + Money(bill.Adjustment) : "").
+                                Se o banco cobra um valor um pouco diferente, informe a diferença (com sinal de menos se o banco cobra menos).
+                                O ajuste só acerta esta fatura; não é um lançamento e não aparece nos relatórios.
+                            </p>
+                            <p>
+                                <input value="@AdjustmentInput(bill)" data-money="brl-signed" inputmode="numeric" placeholder="R$ 0,00"
+                                       @onchange="e => _adjustInputs[Key(bill)] = e.Value?.ToString() ?? string.Empty" />
+                                <button @onclick="() => SaveAdjustment(bill)">Salvar ajuste</button>
+                                @if (!bill.IsPaid && bill.Paid > 0m && bill.Remaining < 1m)
+                                {
+                                    <button class="primary" @onclick="() => WriteOffDifference(bill)">Quitar @Money(bill.Remaining) de diferença</button>
+                                }
+                            </p>
+
+                            @if (!bill.IsPaid)
+                            {
+                                var candidates = Candidates(bill);
+                                <h3>Ligar um pagamento a esta fatura (faltam @Money(bill.Remaining))</h3>
+                                @if (candidates.Count == 0)
+                                {
+                                    <p class="muted">
+                                        Nenhum pagamento de fatura livre perto destas datas. Lance o pagamento em
+                                        <a href="lancamentos">Lançamentos</a> (tipo "Pagamento de fatura") ou, se não vai lançar, marque a fatura como paga.
+                                    </p>
+                                }
+                                else
+                                {
+                                    <table class="grid">
+                                        <thead><tr><th>Data</th><th>Conta</th><th>Descrição</th><th class="num">Valor</th><th class="num">Livre</th><th>Aplicar (R$)</th><th></th></tr></thead>
+                                        <tbody>
+                                            @foreach (var c in candidates)
+                                            {
+                                                <tr @key="c.Payment.Id">
+                                                    <td>@c.Payment.Date.ToString("dd/MM/yyyy")</td>
+                                                    <td>@c.Payment.Account</td>
+                                                    <td>@c.Payment.RawDescription</td>
+                                                    <td class="num">@Money(Math.Abs(c.Payment.Amount))</td>
+                                                    <td class="num">@Money(c.Free)</td>
+                                                    <td>
+                                                        <input value="@Input(c.Payment.Id, Math.Min(c.Free, bill.Remaining))"
+                                                               data-money="brl" inputmode="numeric"
+                                                               @onchange="e => _inputs[c.Payment.Id] = e.Value?.ToString() ?? string.Empty" />
+                                                    </td>
+                                                    <td class="actions"><button class="primary" @onclick="() => Link(c, bill)">Ligar</button></td>
+                                                </tr>
+                                            }
+                                        </tbody>
+                                    </table>
+                                }
+                                @if (bill.SettledByHand is null)
+                                {
+                                    <p><button @onclick="() => Settle(bill)">Marcar a fatura como paga (sem ligar pagamento)</button>
+                                       <span class="muted">só tira a fatura da lista; não lança o dinheiro que saiu da conta.</span></p>
+                                }
+                            }
+                            @if (_error is not null) { <p class="error">@_error</p> }
+                        </td>
+                    </tr>
+                }
+            }
+        </tbody>
+    </table>
+}
+
+@if (_free.Count > 0)
+{
+    <section class="card-box wide">
+        <h2>Pagamentos de fatura ainda sem destino</h2>
+        <p class="muted">Lançamentos do tipo "Pagamento de fatura" que ainda não foram usados em nenhuma fatura (ou sobraram valores).</p>
+        <table class="grid">
+            <thead><tr><th>Data</th><th>Conta</th><th>Descrição</th><th class="num">Valor</th><th class="num">Livre</th></tr></thead>
+            <tbody>
+                @foreach (var c in _free)
+                {
+                    <tr>
+                        <td>@c.Payment.Date.ToString("dd/MM/yyyy")</td>
+                        <td>@c.Payment.Account</td>
+                        <td>@c.Payment.RawDescription</td>
+                        <td class="num">@Money(Math.Abs(c.Payment.Amount))</td>
+                        <td class="num">@Money(c.Free)</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </section>
+}
+
+@code {
+    private static readonly CultureInfo Br = new("pt-BR");
+    private static DateOnly Today => DateOnly.FromDateTime(DateTime.Today);
+
+    private sealed record FreePayment(Transaction Payment, decimal Free);
+
+    private IReadOnlyList<CardBillStatement> _all = Array.Empty<CardBillStatement>();
+    private List<string> _cardNames = new();
+    private List<FreePayment> _free = new();
+    private HashSet<string> _cardSet = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<Guid, string> _inputs = new();
+    private readonly Dictionary<string, string> _adjustInputs = new();
+    private decimal _toPay, _overdue, _next30, _openTotal;
+    private string _card = "";
+    private bool _showPaid;
+    private string? _open;
+    private string? _error;
+
+    protected override void OnInitialized() => Reload();
+
+    private static string Key(CardBillStatement bill) => bill.Card.Name + "|" + bill.Closing.ToString("yyyy-MM-dd");
+
+    private void Reload()
+    {
+        var accounts = Store.GetAccounts();
+        var transactions = Store.GetAll();
+        var ledger = CardBillLedger.Build(accounts, transactions, Store.GetCardBillSettlements(), Store.GetCardBillLinks(), Today,
+            Store.GetCardBillAdjustments());
+        _all = ledger.Statements;
+        _cardSet = accounts.Where(a => a.Kind == AccountKind.CreditCard).Select(a => a.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        _cardNames = _all.Select(b => b.Card.Name).Distinct().OrderBy(n => n, StringComparer.CurrentCultureIgnoreCase).ToList();
+
+        var unpaid = _all.Where(b => !b.IsPaid).ToList();
+        _toPay = unpaid.Where(b => b.State != CardBillState.Open).Sum(b => b.Remaining);
+        _overdue = unpaid.Where(b => b.State == CardBillState.Overdue).Sum(b => b.Remaining);
+        _next30 = unpaid.Where(b => b.State is CardBillState.ToPay or CardBillState.Partial && b.Due <= Today.AddDays(30)).Sum(b => b.Remaining);
+        _openTotal = unpaid.Where(b => b.State == CardBillState.Open).Sum(b => b.Total);
+
+        // What each payment entry still has free: its amount minus what any bill already took from it.
+        var used = _all.SelectMany(b => b.Parts).GroupBy(p => p.Payment.Id).ToDictionary(g => g.Key, g => g.Sum(p => p.Amount));
+        _free = transactions
+            .Where(t => t.Type == TransactionType.CardBillPayment)
+            .Select(t => new FreePayment(t, Math.Abs(t.Amount) - (used.TryGetValue(t.Id, out var u) ? u : 0m)))
+            .Where(f => f.Free > 0.005m)
+            .OrderByDescending(f => f.Payment.Date)
+            .ToList();
+
+        _inputs.Clear();
+        _adjustInputs.Clear();
+    }
+
+    private List<CardBillStatement> Shown => _all
+            .Where(b => (_card.Length == 0 || b.Card.Name == _card)
+                        && (_showPaid ? b.Due >= Today.AddDays(-365) : !b.IsPaid || b.Due >= Today.AddDays(-30)))
+            .OrderBy(b => b.IsPaid).ThenBy(b => b.Due).ThenBy(b => b.Card.Name, StringComparer.CurrentCultureIgnoreCase)
+            .ToList();
+
+    private static string Money(decimal value) => "R$ " + value.ToString("N2", Br);
+
+    private static string StateText(CardBillStatement bill) => bill.State switch
+    {
+        CardBillState.Open => $"aberta (fecha em {bill.Closing:dd/MM})",
+        CardBillState.ToPay => "fechada, a pagar",
+        CardBillState.Partial => "paga em parte",
+        CardBillState.Overdue => bill.Paid > 0m ? "vencida, paga em parte" : "vencida",
+        _ => "paga",
+    };
+
+    private void Toggle(string key)
+    {
+        _open = _open == key ? null : key;
+        _error = null;
+    }
+
+    // Payment entries that could pay this bill: free amount, near the bill's dates, and from the right side
+    // (a bank outflow, or an inflow on this very card).
+    private List<FreePayment> Candidates(CardBillStatement bill) => _free
+        .Where(f => f.Payment.Date >= bill.Closing.AddDays(-10) && f.Payment.Date <= bill.Due.AddDays(60)
+                    && (f.Payment.Amount < 0
+                        ? !_cardSet.Contains(f.Payment.Account)
+                        : string.Equals(f.Payment.Account, bill.Card.Name, StringComparison.OrdinalIgnoreCase)))
+        .OrderBy(f => Math.Abs(f.Payment.Date.DayNumber - bill.Due.DayNumber))
+        .ToList();
+
+    private string Input(Guid id, decimal suggested) =>
+        _inputs.TryGetValue(id, out var v) ? v : "R$ " + suggested.ToString("N2", Br);
+
+    private string AdjustmentInput(CardBillStatement bill) =>
+        _adjustInputs.TryGetValue(Key(bill), out var v) ? v
+        : bill.Adjustment == 0m ? "" : "R$ " + bill.Adjustment.ToString("N2", Br);
+
+    private void SaveAdjustment(CardBillStatement bill)
+    {
+        _error = null;
+        var text = AdjustmentInput(bill).Replace("R$", "").Trim();
+        decimal value = 0m;
+        if (text.Length > 0 && text != "-"
+            && !decimal.TryParse(text, NumberStyles.Number | NumberStyles.AllowLeadingSign, Br, out value))
+        {
+            _error = "Ajuste inválido. Use o formato 0,03 ou -0,03.";
+            return;
+        }
+        if (Math.Abs(value) > 50m)
+        {
+            _error = "Ajuste grande demais para ser arredondamento (máximo R$ 50,00). Confira os lançamentos da fatura.";
+            return;
+        }
+
+        Store.SetCardBillAdjustment(bill.Card.Name, bill.Closing, value);
+        Toasts.Success(value == 0m ? "Ajuste removido." : $"Ajuste de {Money(value)} salvo.");
+        Reload();
+    }
+
+    // The bank charged a little less than the entries add up to: lower the total by what is left, so the bill is paid.
+    private void WriteOffDifference(CardBillStatement bill)
+    {
+        Store.SetCardBillAdjustment(bill.Card.Name, bill.Closing, bill.Adjustment - bill.Remaining);
+        Toasts.Success($"Diferença de {Money(bill.Remaining)} quitada.");
+        Reload();
+    }
+
+    private void Link(FreePayment candidate, CardBillStatement bill)
+    {
+        _error = null;
+        var text = Input(candidate.Payment.Id, Math.Min(candidate.Free, bill.Remaining)).Replace("R$", "").Trim();
+        if (!decimal.TryParse(text, NumberStyles.Number, Br, out var amount) || amount <= 0)
+        {
+            _error = "Valor inválido. Use o formato 1.234,56.";
+            return;
+        }
+        if (amount > candidate.Free + 0.005m)
+        {
+            _error = $"Esse pagamento só tem {Money(candidate.Free)} livres.";
+            return;
+        }
+        if (amount > bill.Remaining + 0.005m)
+        {
+            _error = $"A fatura só tem {Money(bill.Remaining)} a pagar.";
+            return;
+        }
+
+        try
+        {
+            Store.LinkCardBillPayment(candidate.Payment.Id, bill.Card.Name, bill.Closing, amount);
+        }
+        catch (ArgumentException ex)
+        {
+            _error = ex.Message;
+            return;
+        }
+        Toasts.Success($"{Money(amount)} aplicados na fatura do {bill.Card.Name} (fecha {bill.Closing:dd/MM}).");
+        Reload();
+    }
+
+    private void Unlink(Guid paymentId, CardBillStatement bill)
+    {
+        Store.UnlinkCardBillPayment(paymentId, bill.Card.Name, bill.Closing);
+        Toasts.Success("Pagamento desligado da fatura.");
+        Reload();
+    }
+
+    private void Settle(CardBillStatement bill)
+    {
+        Store.SetCardBillSettled(bill.Card.Name, bill.Closing, Today);
+        Toasts.Success($"Fatura do {bill.Card.Name} (fecha {bill.Closing:dd/MM}) marcada como paga.");
+        Reload();
+    }
+
+    private void Unsettle(CardBillStatement bill)
+    {
+        Store.ClearCardBillSettled(bill.Card.Name, bill.Closing);
+        Toasts.Success("Marcação desfeita.");
+        Reload();
+    }
+}

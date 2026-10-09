@@ -26,6 +26,43 @@ public class ManualEntryTests
     }
 
     [Fact]
+    public void ABillPaymentIsNeutralAndNeverPending()
+    {
+        using var store = new CashPilotStore(":memory:");
+
+        ManualEntries.Add(store, Day, "Banco Exemplo", "Pagamento fatura", 500m, income: false,
+            chosen: new Classification("Mercado", ""), type: TransactionType.CardBillPayment);
+
+        var saved = Assert.Single(store.GetAll());
+        Assert.Equal(-500m, saved.Amount);
+        Assert.Equal(TransactionType.CardBillPayment, saved.Type);
+        Assert.Null(saved.Category);
+        Assert.Empty(store.GetPending());
+    }
+
+    [Fact]
+    public void ATransferKeepsItsDirectionAndLearnsNothing()
+    {
+        using var store = new CashPilotStore(":memory:");
+
+        ManualEntries.Add(store, Day, "Banco A", "Pix para mim", 200m, income: false, type: TransactionType.InternalTransfer);
+        ManualEntries.Add(store, Day, "Banco B", "Pix para mim", 200m, income: true, type: TransactionType.InternalTransfer);
+
+        var all = store.GetAll();
+        Assert.All(all, t => Assert.Equal(TransactionType.InternalTransfer, t.Type));
+        Assert.Equal(new[] { -200m, 200m }, all.Select(t => t.Amount).OrderBy(a => a));
+        Assert.Empty(store.GetPending());
+    }
+
+    [Fact]
+    public void OtherTypesAreRefused()
+    {
+        using var store = new CashPilotStore(":memory:");
+        Assert.Throws<ArgumentException>(() =>
+            ManualEntries.Add(store, Day, "Dinheiro", "x", 1m, income: false, type: TransactionType.CardCashAdvance));
+    }
+
+    [Fact]
     public void AnIncomeIsStoredPositive()
     {
         using var store = new CashPilotStore(":memory:");

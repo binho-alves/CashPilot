@@ -33,6 +33,9 @@
             <select @bind="_newKind">
                 <option value="expense">Gasto</option>
                 <option value="income">Receita</option>
+                <option value="bill">Pagamento de fatura (saiu da conta)</option>
+                <option value="transfer-out">Transferência entre contas minhas (saiu)</option>
+                <option value="transfer-in">Transferência entre contas minhas (entrou)</option>
             </select>
         </label>
         <label>Categoria (opcional) <input list="dl-categories" @bind="_newCategory" placeholder="deixe em branco para o app tentar" /></label>
@@ -40,7 +43,9 @@
         <label>&nbsp;<button class="primary" @onclick="AddEntry">Adicionar</button></label>
     </div>
     @if (_newError is not null) { <p class="error">@_newError</p> }
-    <p class="muted">Sem categoria, o app usa o que já aprendeu; se não souber, o lançamento vai para Pendentes. Com categoria, ela é aprendida para as próximas vezes.</p>
+    <p class="muted">Sem categoria, o app usa o que já aprendeu; se não souber, o lançamento vai para Pendentes. Com categoria, ela é aprendida para as próximas vezes.
+        Pagamento de fatura e transferência entre contas suas não contam como gasto nem receita (ignoram a categoria): lance só o lado da conta de onde o dinheiro saiu,
+        ou os dois lados se quiser. Lançar o pagamento da fatura aqui o liga à fatura do cartão pelo valor e pela data, como no extrato importado.</p>
 </section>
 
 <div class="filters">
@@ -181,7 +186,13 @@
     // Text values on purpose: Blazor drops an attribute rendered from a bool "false" and renders "true" without a value,
     // so a bool-valued <option> never told "Receita" from "Gasto".
     private string _newKind = "expense";
-    private bool _newIncome => _newKind == "income";
+    private bool _newIncome => _newKind is "income" or "transfer-in";
+    private TransactionType? _newType => _newKind switch
+    {
+        "bill" => TransactionType.CardBillPayment,
+        "transfer-out" or "transfer-in" => TransactionType.InternalTransfer,
+        _ => null,
+    };
     private string _newCategory = "";
     private string _newItem = "";
     private string? _newError;
@@ -217,11 +228,13 @@
 
         try
         {
-            var chosen = string.IsNullOrWhiteSpace(_newCategory) ? null : new Classification(_newCategory, _newItem);
-            var result = ManualEntries.Add(Store, _newDate, _newAccount, _newDescription, amount, _newIncome, chosen);
+            var chosen = _newType is not null || string.IsNullOrWhiteSpace(_newCategory) ? null : new Classification(_newCategory, _newItem);
+            var result = ManualEntries.Add(Store, _newDate, _newAccount, _newDescription, amount, _newIncome, chosen, type: _newType);
             Reload();
             _savedId = result.Transaction.Id;
-            var where = result.Transaction.Category is { } c
+            var where = _newType is not null
+                ? " (não conta como gasto nem receita)"
+                : result.Transaction.Category is { } c
                 ? (result.AutoClassified ? $" (classificado como {c})" : $" ({c})")
                 : " (ficou em Pendentes)";
             Toasts.Success("Lançamento adicionado: " + result.Transaction.RawDescription + where);

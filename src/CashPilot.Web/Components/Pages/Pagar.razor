@@ -121,6 +121,7 @@
             Fatura paga sai da lista "O que falta pagar". Se uma fatura aparece sem pagamento mas você pagou, o valor pago deve ser diferente
             do total que o app calculou (lançamento faltando ou pagamento parcial): use "Marcar como paga". Isso só tira a fatura da lista;
             não lança o pagamento, então se o dinheiro já saiu da conta, importe o extrato ou ajuste o saldo.
+            Para ligar pagamentos a um cartão e dar baixa em parte da fatura, use a página <a href="faturas">Faturas</a>.
         </p>
         @if (_recentBills.Count > 0)
         {
@@ -136,13 +137,13 @@
                             <td>@bill.Closing.ToString("dd/MM/yyyy")</td>
                             <td>@bill.Due.ToString("dd/MM/yyyy")</td>
                             <td class="num">@Money(bill.Total)</td>
-                            <td class="@(bill.Paid || bill.Due >= Today ? "" : "neg")">@BillStatus(bill)</td>
+                            <td class="@(bill.IsPaid || bill.Due >= Today ? "" : "neg")">@BillStatus(bill)</td>
                             <td class="actions">
-                                @if (bill.ManualPaidOn is not null)
+                                @if (bill.SettledByHand is not null)
                                 {
                                     <button @onclick="() => UnsettleBill(bill.Card.Name, bill.Closing)">Desfazer</button>
                                 }
-                                else if (!bill.Paid)
+                                else if (!bill.IsPaid)
                                 {
                                     <button @onclick="() => SettleBill(bill.Card.Name, bill.Closing)">Marcar como paga</button>
                                 }
@@ -183,7 +184,7 @@
     private readonly Dictionary<string, string> _balanceInputs = new();
     private IReadOnlyList<UpcomingPayment> _upcoming = Array.Empty<UpcomingPayment>();
     private decimal _totalBalance, _next30, _all, _overdue;
-    private IReadOnlyList<CardBillCycle> _recentBills = Array.Empty<CardBillCycle>();
+    private IReadOnlyList<CardBillStatement> _recentBills = Array.Empty<CardBillStatement>();
     private IReadOnlyList<Transaction> _unmatched = Array.Empty<Transaction>();
 
     private string _newDescription = "";
@@ -207,11 +208,13 @@
         _totalBalance = _balances.Values.Sum();
 
         var settlements = Store.GetCardBillSettlements();
-        var matches = CardBillMatcher.Match(accounts, transactions, settlements);
-        _recentBills = matches.Cycles.Where(c => c.Due >= Today.AddDays(-45)).OrderBy(c => c.Due).ToList();
-        _unmatched = matches.UnmatchedPayments.Where(p => p.Date >= Today.AddDays(-90)).ToList();
+        var links = Store.GetCardBillLinks();
+        var adjustments = Store.GetCardBillAdjustments();
+        var ledger = CardBillLedger.Build(accounts, transactions, settlements, links, Today, adjustments);
+        _recentBills = ledger.Statements.Where(c => c.Due >= Today.AddDays(-45)).OrderBy(c => c.Due).ToList();
+        _unmatched = ledger.UnmatchedPayments.Where(p => p.Date >= Today.AddDays(-90)).ToList();
 
-        _upcoming = PaymentSchedule.Build(accounts, transactions, Store.GetPayables(), Today, settlements);
+        _upcoming = PaymentSchedule.Build(accounts, transactions, Store.GetPayables(), Today, settlements, links, adjustments);
         _all = _upcoming.Sum(u => u.Amount);
         _overdue = _upcoming.Where(u => u.Overdue).Sum(u => u.Amount);
         _next30 = _upcoming.Where(u => u.DueDate <= Today.AddDays(30)).Sum(u => u.Amount);
@@ -229,9 +232,11 @@
 
     private string BalanceInput(string name) => _balanceInputs.TryGetValue(name, out var v) ? v : "";
 
-    private static string BillStatus(CardBillCycle bill) =>
-        bill.Payment is { } p ? $"paga em {p.Date:dd/MM/yyyy}"
-        : bill.ManualPaidOn is { } m ? $"paga em {m:dd/MM/yyyy} (marcada por você)"
+    private static string BillStatus(CardBillStatement bill) =>
+        bill.SettledByHand is { } m ? $"paga em {m:dd/MM/yyyy} (marcada por você)"
+        : bill.IsPaid && bill.Parts.Count > 0 ? $"paga em {bill.Parts.Max(p => p.Payment.Date):dd/MM/yyyy}"
+        : bill.IsPaid ? "paga"
+        : bill.Paid > 0m ? $"paga em parte ({Money(bill.Paid)}), faltam {Money(bill.Remaining)}"
         : bill.Due >= Today ? "em aberto"
         : "sem pagamento encontrado";
 
