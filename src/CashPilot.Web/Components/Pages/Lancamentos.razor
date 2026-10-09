@@ -1,4 +1,5 @@
 @page "/lancamentos"
+@using CashPilot.Infrastructure.Importing
 @inject CashPilotStore Store
 @inject ToastService Toasts
 
@@ -12,6 +13,35 @@
         <option value="@category"></option>
     }
 </datalist>
+
+<datalist id="dl-new-accounts">
+    @foreach (var name in _accountChoices)
+    {
+        <option value="@name"></option>
+    }
+</datalist>
+
+<section class="card-box wide">
+    <h2>Novo lançamento</h2>
+    <p class="muted">Para dinheiro, Pix que ainda não chegou no extrato e outros gastos fora das importações.</p>
+    <div class="filters">
+        <label>Data <input type="date" @bind="_newDate" /></label>
+        <label>Conta <input list="dl-new-accounts" @bind="_newAccount" placeholder="ex.: Dinheiro" /></label>
+        <label>Descrição <input @bind="_newDescription" placeholder="ex.: Padaria" /></label>
+        <label>Valor (R$) <input @bind="_newAmount" data-money="brl" inputmode="numeric" placeholder="R$ 0,00" /></label>
+        <label>Tipo
+            <select @bind="_newIncome">
+                <option value="@false">Gasto</option>
+                <option value="@true">Receita</option>
+            </select>
+        </label>
+        <label>Categoria (opcional) <input list="dl-categories" @bind="_newCategory" placeholder="deixe em branco para o app tentar" /></label>
+        <label>Item (opcional) <input @bind="_newItem" /></label>
+        <label>&nbsp;<button class="primary" @onclick="AddEntry">Adicionar</button></label>
+    </div>
+    @if (_newError is not null) { <p class="error">@_newError</p> }
+    <p class="muted">Sem categoria, o app usa o que já aprendeu; se não souber, o lançamento vai para Pendentes. Com categoria, ela é aprendida para as próximas vezes.</p>
+</section>
 
 <div class="filters">
     <label>Mês
@@ -143,6 +173,16 @@
     private Guid? _confirmDelete;
     private Guid? _savedId;
 
+    private List<string> _accountChoices = new();
+    private DateOnly _newDate = DateOnly.FromDateTime(DateTime.Today);
+    private string _newAccount = "";
+    private string _newDescription = "";
+    private string _newAmount = "";
+    private bool _newIncome;
+    private string _newCategory = "";
+    private string _newItem = "";
+    private string? _newError;
+
     private string _month = "";
     private string _account = "";
     private string _category = "";
@@ -157,8 +197,40 @@
         _accounts = _all.Select(t => t.Account).Distinct().OrderBy(a => a).ToList();
         _categories = _all.Select(t => t.Category).Where(c => !string.IsNullOrEmpty(c)).Select(c => c!)
             .Distinct().OrderBy(c => c).ToList();
+        _accountChoices = Store.GetAccounts().Select(a => a.Name).Concat(_accounts)
+            .Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(a => a).ToList();
         _edits.Clear();
         _confirmDelete = null;
+    }
+
+    private void AddEntry()
+    {
+        _newError = null;
+        if (!decimal.TryParse(_newAmount.Replace("R$", "").Trim(), NumberStyles.Number, Br, out var amount) || amount <= 0)
+        {
+            _newError = "Valor inválido. Use o formato 12,50 (sempre positivo; o tipo define se é gasto ou receita).";
+            return;
+        }
+
+        try
+        {
+            var chosen = string.IsNullOrWhiteSpace(_newCategory) ? null : new Classification(_newCategory, _newItem);
+            var result = ManualEntries.Add(Store, _newDate, _newAccount, _newDescription, amount, _newIncome, chosen);
+            Reload();
+            _savedId = result.Transaction.Id;
+            var where = result.Transaction.Category is { } c
+                ? (result.AutoClassified ? $" (classificado como {c})" : $" ({c})")
+                : " (ficou em Pendentes)";
+            Toasts.Success("Lançamento adicionado: " + result.Transaction.RawDescription + where);
+            _newDescription = "";
+            _newAmount = "";
+            _newCategory = "";
+            _newItem = "";
+        }
+        catch (ArgumentException ex)
+        {
+            _newError = ex.Message;
+        }
     }
 
     private List<Transaction> Filtered => _all.Where(t =>

@@ -44,4 +44,5 @@ R$ 1.000 a 3,09% (1x): custo R$ 30,90, líquido R$ 969,10. A tabela de taxas por
 - Importação de extratos (OFX de qualquer banco, CSV e PDF do Bradesco, PDF do Itaú) com prévia antes de gravar, sem duplicar e reconhecendo transferências entre as suas contas; faltam PDFs de outros bancos
 - Imagens de fatura/extrato (prints do app) lidas por OCR local e gratuito (Tesseract; precisa de `data/tessdata/por.traineddata`, fora do git); o texto lido aparece para você revisar antes de importar
 - Pagamento de fatura casado com a fatura (mesmo valor, feito entre o fechamento e 10 dias depois do vencimento): fatura paga sai de "O que falta pagar" e do calendário, e a tela mostra as faturas recentes e os pagamentos sem fatura; quando o valor não bate, dá para marcar a fatura como paga à mão (isso só a tira da lista, sem lançar o pagamento)
+- Lançamento manual (dinheiro, Pix que ainda não chegou no extrato): o app classifica pelo que já aprendeu ou deixa em Pendentes
 - Exclusão manual de lançamentos (a exclusão é lógica: reimportar o mesmo arquivo não traz de volta) e aviso rápido ao salvar
