@@ -8,8 +8,10 @@
 <h1>Calendário de vencimentos</h1>
 
 <p class="muted">
-    Dia a dia, o que vence e como fica o saldo das contas bancárias se você pagar tudo na data, sem contar receitas.
+    Dia a dia, o que vence e como fica o saldo das contas bancárias se você pagar tudo na data.
     O saldo vem de <a href="pagar">Contas a pagar</a>.
+    Com a previsão ligada entram também o que se repete todo mês (aluguel, assinaturas, salário), as parcelas que ainda vão cair
+    e as faturas dos próximos meses. Isso é uma estimativa: parte do princípio de que os próximos meses se parecem com os últimos.
 </p>
 
 <div class="filters">
@@ -19,9 +21,40 @@
             <option value="60">60 dias</option>
             <option value="90">90 dias</option>
             <option value="180">180 dias</option>
+            <option value="365">12 meses</option>
         </select>
     </label>
+    <label class="check"><input type="checkbox" @bind="_forecast" /> Incluir previsão (fixos, parcelas, faturas futuras)</label>
+    <label class="check"><input type="checkbox" @bind="_income" disabled="@(!_forecast)" /> Contar receitas fixas</label>
 </div>
+
+@if (Summary.Days.Count > 0)
+{
+    <div class="cards">
+        <div class="card @(Summary.FirstNegative is null ? "" : "warn")">
+            <span class="muted">Primeiro dia no vermelho</span>
+            <strong>@(Summary.FirstNegative is { } negative ? negative.ToString("dd/MM/yyyy") : "nenhum")</strong>
+            @if (Summary.FirstBeyondLis is { } beyond)
+            {
+                <span class="neg">passa do LIS em @beyond.ToString("dd/MM")</span>
+            }
+            else if (Summary.FirstNegative is not null)
+            {
+                <span class="muted">dentro do LIS</span>
+            }
+        </div>
+        <div class="card">
+            <span class="muted">Menor saldo no período</span>
+            <strong class="@(Summary.Lowest!.Balance < 0 ? "neg" : "")">@Money(Summary.Lowest.Balance)</strong>
+            <span class="muted">em @Summary.Lowest.Date.ToString("dd/MM/yyyy")</span>
+        </div>
+        <div class="card">
+            <span class="muted">Saldo no fim do período</span>
+            <strong>@Money(Summary.Days[^1].Balance)</strong>
+            <span class="muted">em @Summary.Days[^1].Date.ToString("dd/MM/yyyy")</span>
+        </div>
+    </div>
+}
 
 @if (_withoutBalance.Count > 0)
 {
@@ -31,12 +64,12 @@
     </p>
 }
 
-@if (_overdue.Count > 0)
+@if (Overdue.Count > 0)
 {
     <section class="card-box wide">
-        <h2 class="neg">Atrasados: @Money(_overdue.Sum(o => o.Amount))</h2>
+        <h2 class="neg">Atrasados: @Money(Overdue.Sum(o => o.Amount))</h2>
         <ul class="result">
-            @foreach (var item in _overdue)
+            @foreach (var item in Overdue)
             {
                 <li>@item.DueDate.ToString("dd/MM") — @item.Description: @Money(item.Amount)</li>
             }
@@ -46,27 +79,31 @@
 
 <table class="grid">
     <thead>
-        <tr><th>Dia</th><th>O que vence</th><th class="num">Total do dia</th><th class="num">Saldo depois</th><th>LIS</th></tr>
+        <tr><th>Dia</th><th>O que vence</th><th class="num">Saídas</th><th class="num">Entradas</th><th class="num">Saldo depois</th><th>LIS</th></tr>
     </thead>
     <tbody>
-        @foreach (var day in Days)
+        @foreach (var day in Summary.Days)
         {
             <tr>
                 <td>@day.Date.ToString("dd/MM") <span class="muted">@WeekDay(day.Date)</span></td>
                 <td>
                     @foreach (var item in day.Items)
                     {
-                        <div>@item.Description <span class="muted">(@Money(item.Amount))</span></div>
+                        <div>
+                            @if (item.Kind == UpcomingKind.RecurringIncome) { <span class="pos">+ </span> }
+                            @item.Description <span class="muted">(@Money(item.Amount)@Tag(item))</span>
+                        </div>
                     }
                 </td>
-                <td class="num">@Money(day.Total)</td>
+                <td class="num">@(day.Outflow > 0 ? Money(day.Outflow) : "")</td>
+                <td class="num pos">@(day.Inflow > 0 ? Money(day.Inflow) : "")</td>
                 <td class="num @(day.Balance < 0 ? "neg" : "")">@Money(day.Balance)</td>
                 <td class="muted">@LisNote(day.Balance)</td>
             </tr>
         }
-        @if (!Days.Any())
+        @if (!Summary.Days.Any())
         {
-            <tr><td colspan="5" class="muted">Nada vence nos próximos @_horizon dias.</td></tr>
+            <tr><td colspan="6" class="muted">Nada vence nos próximos @_horizon dias.</td></tr>
         }
     </tbody>
 </table>
@@ -74,16 +111,23 @@
 @code {
     private static readonly CultureInfo Br = new("pt-BR");
 
-    private sealed record Day(DateOnly Date, List<UpcomingPayment> Items, decimal Total, decimal Balance);
-
     private int _horizon = 60;
+    private bool _forecast = true;
+    private bool _income = true;
     private decimal _startBalance;
     private decimal _lisLimit;
-    private List<UpcomingPayment> _upcoming = new();
-    private List<UpcomingPayment> _overdue = new();
+    private IReadOnlyList<UpcomingPayment> _basic = Array.Empty<UpcomingPayment>();
+    private IReadOnlyList<UpcomingPayment> _withForecast = Array.Empty<UpcomingPayment>();
+    private IReadOnlyList<UpcomingPayment> _withForecastNoIncome = Array.Empty<UpcomingPayment>();
     private List<string> _withoutBalance = new();
 
     private static DateOnly Today => DateOnly.FromDateTime(DateTime.Today);
+
+    private IReadOnlyList<UpcomingPayment> Items => !_forecast ? _basic : _income ? _withForecast : _withForecastNoIncome;
+
+    private List<UpcomingPayment> Overdue => Items.Where(i => i.Overdue).ToList();
+
+    private ForecastSummary Summary => CashForecast.Project(_startBalance, Items, _lisLimit, Today, _horizon);
 
     protected override void OnInitialized()
     {
@@ -94,25 +138,19 @@
         _lisLimit = banks.Sum(b => b.OverdraftLimit ?? 0m);
         _withoutBalance = banks.Where(b => b.BalanceAnchor is null).Select(b => b.Name).ToList();
 
-        var schedule = PaymentSchedule.Build(accounts, transactions, Store.GetPayables(), Today, Store.GetCardBillSettlements());
-        _overdue = schedule.Where(s => s.Overdue).ToList();
-        _upcoming = schedule.Where(s => !s.Overdue).ToList();
+        var payables = Store.GetPayables();
+        var settlements = Store.GetCardBillSettlements();
+        var until = Today.AddDays(365);
+        _basic = PaymentSchedule.Build(accounts, transactions, payables, Today, settlements);
+        _withForecast = CashForecast.Build(accounts, transactions, payables, Today, until, settlements);
+        _withForecastNoIncome = CashForecast.Build(accounts, transactions, payables, Today, until, settlements, includeIncome: false);
     }
 
-    private IEnumerable<Day> Days
-    {
-        get
-        {
-            var limit = Today.AddDays(_horizon);
-            var balance = _startBalance - _overdue.Sum(o => o.Amount);
-            foreach (var group in _upcoming.Where(u => u.DueDate <= limit).GroupBy(u => u.DueDate).OrderBy(g => g.Key))
-            {
-                var total = group.Sum(g => g.Amount);
-                balance -= total;
-                yield return new Day(group.Key, group.ToList(), total, balance);
-            }
-        }
-    }
+    private static string Tag(UpcomingPayment item) =>
+        item.Kind is UpcomingKind.RecurringExpense or UpcomingKind.RecurringIncome ? ", previsto, repete todo mês" :
+        item.ProjectedPart > 0 && item.ProjectedPart >= item.Amount ? ", prevista" :
+        item.ProjectedPart > 0 ? $", inclui {Money(item.ProjectedPart)} previstos" :
+        "";
 
     private string LisNote(decimal balance) =>
         balance >= 0 ? "" :

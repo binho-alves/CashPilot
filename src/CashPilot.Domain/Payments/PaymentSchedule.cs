@@ -8,9 +8,17 @@ public enum UpcomingKind
     CardBill = 1,
     Payable = 2,
     FutureEntry = 3,
+    /// <summary>Forecast only (<see cref="CashForecast"/>): a monthly expense repeated from the history.</summary>
+    RecurringExpense = 4,
+    /// <summary>Forecast only: a monthly income repeated from the history. <see cref="UpcomingPayment.Amount"/> is the inflow.</summary>
+    RecurringIncome = 5,
 }
 
-/// <summary>One thing to pay. <see cref="Amount"/> is positive. <see cref="PayableId"/> is set for hand-registered ones.</summary>
+/// <summary>
+/// One thing to pay. <see cref="Amount"/> is positive. <see cref="PayableId"/> is set for hand-registered ones.
+/// <see cref="ProjectedPart"/> is the part of the amount that is a forecast rather than an entry (future installments and
+/// recurring card charges added to a card bill); it equals the amount for a bill that has no entry yet.
+/// </summary>
 public sealed record UpcomingPayment(
     UpcomingKind Kind,
     string Description,
@@ -19,7 +27,8 @@ public sealed record UpcomingPayment(
     string? Account,
     Guid? PayableId,
     bool Overdue,
-    DateOnly? Closing = null);
+    DateOnly? Closing = null,
+    decimal ProjectedPart = 0m);
 
 public static class PaymentSchedule
 {

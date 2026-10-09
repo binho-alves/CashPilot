@@ -47,6 +47,7 @@ R$ 1.000 a 3,09% (1x): custo R$ 30,90, líquido R$ 969,10. A tabela de taxas por
 - Parcelas futuras: a partir da última parcela já importada de cada compra no cartão, mostra o que ainda vai cair em cada fatura (por mês de vencimento) e quanto já está comprometido
 - Comparativo mensal: gasto por categoria no mês contra o mês anterior e a média recente, destacando as categorias que subiram bastante
 - Orçamento por categoria: limite mensal por categoria, quanto já foi gasto, quanto resta, aviso ao chegar em 80% e ao estourar, projeção no ritmo atual e sugestão de limite pela média dos meses anteriores
+- Previsão de caixa no Calendário: o que se repete todo mês (aluguel, assinaturas, salário), as parcelas que ainda vão cair e as faturas dos próximos meses entram no saldo projetado, com o primeiro dia no vermelho, o menor saldo e se passa do LIS (é uma estimativa, e pode ser desligada)
 - Lançamento manual (dinheiro, Pix que ainda não chegou no extrato): o app classifica pelo que já aprendeu ou deixa em Pendentes
 - Pendentes com sugestão de categoria (pela descrição parecida já conhecida) e botões para preencher e salvar várias linhas de uma vez, sempre com a sua confirmação
 - Backup: tela para baixar a cópia do banco e os lançamentos em CSV, e cópia automática diária em `data\backups` (guarda as 14 mais recentes)
