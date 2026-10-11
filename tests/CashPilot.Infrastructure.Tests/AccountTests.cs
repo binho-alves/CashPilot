@@ -124,4 +124,20 @@ public class AccountTests
         Assert.False(store.RenameAccount("Inexistente", "Qualquer"));
         Assert.True(store.RenameAccount("Conta A", "CONTA A")); // case-only change is allowed
     }
+
+    [Fact]
+    public void AdditionalCardKeepsItsMainCardThroughRenameAndDelete()
+    {
+        using var store = new CashPilotStore(":memory:");
+        store.SaveAccount(new Account { Name = "Cartão Exemplo", Kind = AccountKind.CreditCard, ClosingDay = 20, DueDay = 28 });
+        store.SaveAccount(new Account { Name = "Cartão Adicional", Kind = AccountKind.CreditCard, ParentCard = "Cartão Exemplo" });
+
+        Assert.Equal("Cartão Exemplo", store.GetAccounts().Single(a => a.Name == "Cartão Adicional").ParentCard);
+
+        store.RenameAccount("Cartão Exemplo", "Cartão Principal");
+        Assert.Equal("Cartão Principal", store.GetAccounts().Single(a => a.Name == "Cartão Adicional").ParentCard);
+
+        Assert.True(store.DeleteAccount("Cartão Principal"));
+        Assert.Null(Assert.Single(store.GetAccounts()).ParentCard);
+    }
 }

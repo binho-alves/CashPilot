@@ -38,8 +38,8 @@ public static class CardBillMatcher
         IEnumerable<Transaction> transactions,
         IEnumerable<CardBillSettlement>? settlements = null)
     {
-        var all = transactions.ToList();
-        var cards = accounts
+        var (accountList, all) = CardFamilies.Fold(accounts, transactions);
+        var cards = accountList
             .Where(a => a.Kind == AccountKind.CreditCard && a.ClosingDay is not null && a.DueDay is not null)
             .ToList();
         var cardNames = cards.Select(c => c.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);

@@ -39,6 +39,10 @@ O banco fica em `data/cashpilot.db` (mude com `--db`). Importar o mesmo arquivo 
 O cartão é cobrado pelo valor bruto, a conta recebe o líquido, e a diferença é a despesa.
 R$ 1.000 a 3,09% (1x): custo R$ 30,90, líquido R$ 969,10. A tabela de taxas por parcela (`CashAdvanceFeeTable`) já vem com as taxas de crédito da maquininha, de 1x a 12x (3,09% a 12,38%).
 
+## Cartões adicionais
+
+Ao cadastrar um cartão de crédito você pode marcá-lo como adicional e escolher de qual cartão ele é. A fatura do cartão principal soma os lançamentos dos dois; o adicional não tem fatura própria.
+
 ## Próximos passos
 
 - App do celular (feito, falta você compilar e testar): novo lançamento, últimos lançamentos e configurações; fila offline

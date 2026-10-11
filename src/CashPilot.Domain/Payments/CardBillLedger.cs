@@ -69,8 +69,7 @@ public static class CardBillLedger
         DateOnly today,
         IEnumerable<CardBillAdjustment>? adjustments = null)
     {
-        var accountList = accounts.ToList();
-        var all = transactions.ToList();
+        var (accountList, all) = CardFamilies.Fold(accounts, transactions);
         var settleList = (settlements ?? Array.Empty<CardBillSettlement>()).ToList();
         var byId = all.GroupBy(t => t.Id).ToDictionary(g => g.Key, g => g.First());
         var valid = (links ?? Array.Empty<CardBillPaymentLink>())

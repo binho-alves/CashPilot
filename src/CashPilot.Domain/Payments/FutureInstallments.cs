@@ -33,10 +33,11 @@ public static class FutureInstallments
     public static IReadOnlyList<InstallmentPlan> Build(
         IEnumerable<Account> accounts, IEnumerable<Transaction> transactions, DateOnly today)
     {
-        var cards = accounts.ToDictionary(a => a.Name.Trim().ToUpperInvariant());
+        var (accountList, transactionList) = CardFamilies.Fold(accounts, transactions);
+        var cards = accountList.ToDictionary(a => a.Name.Trim().ToUpperInvariant());
 
         var plans = new List<InstallmentPlan>();
-        var groups = transactions
+        var groups = transactionList
             .Where(t => t.InstallmentCount is > 1 && t.InstallmentNumber is >= 1 && t.Amount < 0 && SpendingReport.CountsAsSpending(t))
             .GroupBy(t => (
                 Account: t.Account.Trim().ToUpperInvariant(),

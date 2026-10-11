@@ -13,7 +13,7 @@ public enum ImportKind
     PlainText,
 }
 
-public sealed record LoadedFile(ImportKind Kind, string? Text = null, BankStatement? Statement = null, string? Error = null);
+public sealed record LoadedFile(ImportKind Kind, string? Text = null, BankStatement? Statement = null, string? Error = null, string? Note = null);
 
 /// <summary>Looks at an uploaded file (CSV, OFX, TXT or PDF) and says what it is, so the user does not have to choose.</summary>
 public static class ImportFileLoader
@@ -35,9 +35,14 @@ public static class ImportFileLoader
                 return new LoadedFile(ImportKind.Unknown, Error: "O PDF não tem texto (parece escaneado ou é uma imagem). Por enquanto só leio PDFs com texto.");
 
             var statement = BankStatementParsers.TryParsePdf(words);
-            return statement is null
-                ? new LoadedFile(ImportKind.Unknown, Error: "Formato de PDF não reconhecido. Por enquanto: extrato do Bradesco e extrato do Itaú.")
-                : new LoadedFile(ImportKind.BankStatement, Statement: statement);
+            if (statement is not null) return new LoadedFile(ImportKind.BankStatement, Statement: statement);
+
+            // Not an account statement: maybe a card bill, whose lines go to the text box for the user to review.
+            var bill = CardBillPdf.TryRead(words);
+            if (bill is not null) return new LoadedFile(ImportKind.PlainText, Text: bill.Text, Note: CardBillNote(bill));
+
+            return new LoadedFile(ImportKind.Unknown,
+                Error: "Formato de PDF não reconhecido. Por enquanto: extrato do Bradesco, extrato do Itaú e fatura de cartão do Bradesco.");
         }
 
         var text = Decode(bytes);
@@ -52,6 +57,11 @@ public static class ImportFileLoader
 
         return new LoadedFile(ImportKind.PlainText, Text: text);
     }
+
+    private static string CardBillNote(CardBillPdfResult bill) =>
+        $"Fatura de cartão lida: {bill.Entries} lançamentos"
+        + (bill.Skipped > 0 ? $" ({bill.Skipped} pagamento(s) da fatura anterior ficaram de fora)" : "")
+        + ". Confira as linhas na caixa \"Fatura de cartão ou extrato (texto)\", escolha o cartão e importe.";
 
     private static bool IsPdf(string fileName, byte[] bytes) =>
         fileName.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase)

@@ -17,6 +17,12 @@ public sealed record Account
     public required string Name { get; init; }
     public AccountKind Kind { get; init; } = AccountKind.BankAccount;
 
+    /// <summary>
+    /// Name of the main card when this one is an additional card (cartão adicional). Its entries go to the main card's
+    /// bill, closing and due dates, so it has no bill of its own (see <see cref="CardFamilies"/>).
+    /// </summary>
+    public string? ParentCard { get; init; }
+
     /// <summary>Credit card limit.</summary>
     public decimal? CreditLimit { get; init; }
     public int? ClosingDay { get; init; }

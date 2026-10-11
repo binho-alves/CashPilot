@@ -54,9 +54,7 @@ public static class PaymentSchedule
         IEnumerable<CardBillAdjustment>? cardBillAdjustments = null)
     {
         var result = new List<UpcomingPayment>();
-        var all = transactions.ToList();
-
-        var accountList = accounts.ToList();
+        var (accountList, all) = CardFamilies.Fold(accounts, transactions);
         var billedNames = accountList
             .Where(a => a.Kind == AccountKind.CreditCard && a.ClosingDay is not null && a.DueDay is not null)
             .Select(a => a.Name)

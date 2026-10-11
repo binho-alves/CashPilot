@@ -378,7 +378,7 @@ public sealed class CashPilotStore : IDisposable
             SELECT name, kind, credit_limit_cents, closing_day, due_day,
                    overdraft_limit_cents, overdraft_free_days, overdraft_monthly_rate,
                    balance_anchor_cents, balance_anchor_date,
-                   revolving_monthly_rate, installment_monthly_rate
+                   revolving_monthly_rate, installment_monthly_rate, parent_card
             FROM accounts ORDER BY kind, name;
             """);
         using var reader = command.ExecuteReader();
@@ -406,6 +406,7 @@ public sealed class CashPilotStore : IDisposable
                 InstallmentMonthlyRatePercent = reader.IsDBNull(11)
                     ? null
                     : decimal.Parse(reader.GetString(11), CultureInfo.InvariantCulture),
+                ParentCard = reader.IsDBNull(12) ? null : reader.GetString(12),
             });
         }
         return result;
@@ -419,8 +420,8 @@ public sealed class CashPilotStore : IDisposable
         using var command = CreateCommand("""
             INSERT INTO accounts (name, kind, credit_limit_cents, closing_day, due_day,
                                   overdraft_limit_cents, overdraft_free_days, overdraft_monthly_rate,
-                                  revolving_monthly_rate, installment_monthly_rate)
-            VALUES ($name, $kind, $limit, $closing, $due, $odLimit, $odDays, $odRate, $revRate, $instRate)
+                                  revolving_monthly_rate, installment_monthly_rate, parent_card)
+            VALUES ($name, $kind, $limit, $closing, $due, $odLimit, $odDays, $odRate, $revRate, $instRate, $parent)
             ON CONFLICT (name) DO UPDATE SET
                 kind = excluded.kind,
                 credit_limit_cents = excluded.credit_limit_cents,
@@ -430,9 +431,11 @@ public sealed class CashPilotStore : IDisposable
                 overdraft_free_days = excluded.overdraft_free_days,
                 overdraft_monthly_rate = excluded.overdraft_monthly_rate,
                 revolving_monthly_rate = excluded.revolving_monthly_rate,
-                installment_monthly_rate = excluded.installment_monthly_rate;
+                installment_monthly_rate = excluded.installment_monthly_rate,
+                parent_card = excluded.parent_card;
             """);
         command.Parameters.AddWithValue("$name", account.Name.Trim());
+        command.Parameters.AddWithValue("$parent", string.IsNullOrWhiteSpace(account.ParentCard) ? DBNull.Value : account.ParentCard.Trim());
         command.Parameters.AddWithValue("$revRate", account.RevolvingMonthlyRatePercent is { } rv
             ? (object)rv.ToString(CultureInfo.InvariantCulture)
             : DBNull.Value);
@@ -916,15 +919,31 @@ public sealed class CashPilotStore : IDisposable
             adjustments.Parameters.AddWithValue("$to", to);
             adjustments.Parameters.AddWithValue("$from", from);
             adjustments.ExecuteNonQuery();
+
+            // Additional cards that point at the renamed main card.
+            using var children = CreateCommand("UPDATE accounts SET parent_card = $to WHERE parent_card = $from COLLATE NOCASE;");
+            children.Parameters.AddWithValue("$to", to);
+            children.Parameters.AddWithValue("$from", from);
+            children.ExecuteNonQuery();
         });
         return found;
     }
 
     public bool DeleteAccount(string name)
     {
-        using var command = CreateCommand("DELETE FROM accounts WHERE name = $name;");
-        command.Parameters.AddWithValue("$name", name);
-        return command.ExecuteNonQuery() > 0;
+        var deleted = false;
+        InTransaction(() =>
+        {
+            // Its additional cards become ordinary cards again (they keep their entries).
+            using var children = CreateCommand("UPDATE accounts SET parent_card = NULL WHERE parent_card = $name COLLATE NOCASE;");
+            children.Parameters.AddWithValue("$name", name);
+            children.ExecuteNonQuery();
+
+            using var command = CreateCommand("DELETE FROM accounts WHERE name = $name;");
+            command.Parameters.AddWithValue("$name", name);
+            deleted = command.ExecuteNonQuery() > 0;
+        });
+        return deleted;
     }
 
     public HashSet<string> GetCashOutPatterns() => GetPatterns(RuleKind.CashOut);

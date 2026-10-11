@@ -123,7 +123,7 @@
 <section class="card-box wide">
     <h2>Fatura de cartão ou extrato (texto)</h2>
     <p class="muted">
-        Escolha de qual conta ou cartão são os lançamentos e cole as linhas copiadas do app (ou envie um .txt).
+        Escolha de qual conta ou cartão são os lançamentos e cole as linhas copiadas do app, ou envie a fatura em PDF (com texto), um print dela ou um .txt.
         Aceita "05 Out" ou "05/10" sozinhos numa linha, valendo para as linhas de baixo; "Parcela 1 de 3" numa linha vira
         a parcela do lançamento acima; linhas com # no começo são ignoradas.
         Pode colar de novo o mesmo trecho: o que já existe não duplica.
@@ -140,8 +140,16 @@
         </label>
         <label class="check"><input type="checkbox" @bind="_positiveAreExpenses" /> valores positivos são gastos (fatura de cartão)</label>
     </div>
-    <InputFile OnChange="LoadText" accept=".txt,.csv,text/plain" />
-    <textarea class="paste" rows="10" @bind="_pasted" @bind:event="oninput" placeholder="05 Out&#10;ANTHROPIC* CLAUDE SUB   R$ 110,00&#10;CIZI MERCADO EXPRESS   R$ 19,56"></textarea>
+    <InputFile OnChange="LoadText" accept=".txt,.csv,.pdf,.png,.jpg,.jpeg,text/plain,application/pdf,image/*" />
+    @if (_textMessage is not null)
+    {
+        <p class="muted">@_textMessage</p>
+    }
+    @if (_textError is not null)
+    {
+        <p class="error">@_textError</p>
+    }
+    <textarea class="paste" rows="10" @bind="_pasted" @bind:event="oninput" placeholder="@ExamplePlaceholder"></textarea>
     <p><button class="primary" @onclick="ImportText">Importar para @(string.IsNullOrWhiteSpace(_source) ? "…" : _source)</button></p>
 
     @if (_text is not null)
@@ -163,6 +171,8 @@
 
 @code {
     private const long MaxFileBytes = 10 * 1024 * 1024;
+    // A bill exported by a bank app as "a picture of the screen" can be huge (the real one is 80 MB); the app runs on this PC only.
+    private const long MaxBillBytes = 150L * 1024 * 1024;
     private static readonly CultureInfo Br = new("pt-BR");
 
     private BankStatement? _statement;
@@ -172,10 +182,15 @@
     private string _bankAccount = "";
     private string _fileName = "";
     private string? _fileMessage;
+    private string? _textMessage;
+    private string? _textError;
 
     private string StatementPeriod => _statement is { Entries.Count: > 0 }
         ? $"{_statement.Entries.Min(e => e.Date):dd/MM/yyyy} a {_statement.Entries.Max(e => e.Date):dd/MM/yyyy}"
         : "sem lançamentos";
+
+    // In a C# string the line breaks are real; as "&#10;" in the attribute Blazor showed them as text.
+    private const string ExamplePlaceholder = "05 Out\nANTHROPIC* CLAUDE SUB   R$ 110,00\nCIZI MERCADO EXPRESS   R$ 19,56";
 
     private async Task LoadFile(InputFileChangeEventArgs e)
     {
@@ -242,8 +257,9 @@
 
             case ImportKind.PlainText:
                 _pasted = loaded.Text!;
-                _fileMessage = "Texto reconhecido, mas sem formato de extrato conhecido. Ele foi para a caixa "
-                               + "\"Fatura de cartão ou extrato (texto)\", mais abaixo: escolha a conta ou o cartão e importe lá.";
+                _fileMessage = loaded.Note
+                               ?? "Texto reconhecido, mas sem formato de extrato conhecido. Ele foi para a caixa "
+                                  + "\"Fatura de cartão ou extrato (texto)\", mais abaixo: escolha a conta ou o cartão e importe lá.";
                 break;
 
             default:
@@ -330,6 +346,74 @@
 
     private async Task LoadText(InputFileChangeEventArgs e)
     {
+        // A card bill PDF (or a screenshot of one) is read here too, so it does not have to be copied by hand.
+        // Messages from this field stay inside its own card: the page-level error is far below and easy to miss.
+        _textMessage = null;
+        _textError = null;
+        if (e.File.Name.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase) || ImageTextReader.IsImage(e.File.Name))
+        {
+            byte[] bytes;
+            try
+            {
+                using var stream = e.File.OpenReadStream(MaxBillBytes);
+                using var memory = new MemoryStream();
+                await stream.CopyToAsync(memory);
+                bytes = memory.ToArray();
+            }
+            catch (IOException ex)
+            {
+                _textError = "Não foi possível ler o arquivo (limite 150 MB): " + ex.Message;
+                return;
+            }
+
+            _textMessage = "Lendo o arquivo…";
+            StateHasChanged();
+            try
+            {
+                if (ImageTextReader.IsImage(e.File.Name))
+                {
+                    _pasted = await Task.Run(() => ImageReader.Read(bytes));
+                    _textMessage = "Texto lido da imagem. O reconhecimento pode errar números e letras: confira e corrija antes de importar.";
+                    return;
+                }
+
+                // An account statement PDF is not a card bill: say so instead of importing it into a card.
+                var loaded = await Task.Run(() => ImportFileLoader.Load(e.File.Name, bytes));
+                if (loaded.Kind == ImportKind.BankStatement)
+                {
+                    _textMessage = null;
+                    _textError = "Este PDF é um extrato de conta, não uma fatura de cartão. Envie-o em \"Enviar arquivo\", no alto da página.";
+                    return;
+                }
+                if (loaded.Kind == ImportKind.PlainText)
+                {
+                    _pasted = loaded.Text!;
+                    _textMessage = loaded.Note ?? "Texto lido do PDF. Confira as linhas e importe.";
+                    return;
+                }
+
+                // No text in the PDF (a picture of the app screen, which cannot be copied): read it with OCR.
+                var (result, error) = await Task.Run(() => CardBillPdf.FromPdf(bytes, image => ImageReader.Read(image)));
+                if (result is null)
+                {
+                    _textMessage = null;
+                    _textError = error ?? loaded.Error ?? "Arquivo não reconhecido.";
+                    return;
+                }
+                _pasted = result.Text;
+                _textMessage = $"Fatura lida: {result.Entries} lançamentos"
+                               + (result.Skipped > 0 ? $" ({result.Skipped} linha(s) de pagamento ou saldo anterior ficaram de fora)" : "")
+                               + ". Como o PDF é uma imagem, o texto vem de leitura óptica: confira valores e descrições, escolha o cartão e importe.";
+            }
+            catch (InvalidOperationException ex)
+            {
+                _textMessage = null;
+                _textError = ex.Message;
+            }
+            return;
+        }
+
+        _error = null;
         var text = await ReadAsync(e);
         if (text is not null) _pasted = text;
     }

@@ -46,6 +46,10 @@ The database is created at `data/cashpilot.db` (override with `--db`). Importing
 The card is charged the gross amount, the account receives the net, and the difference is the expense.
 R$ 1,000 at 3.09% (1x): cost R$ 30.90, net R$ 969.10. The fee table by number of installments (`CashAdvanceFeeTable`) ships with the terminal's credit fees for 1x to 12x (3.09% to 12.38%).
 
+## Additional cards
+
+When registering a credit card you can mark it as an additional card and pick the main card it belongs to. The main card's bill then sums the entries of both cards; the additional card has no bill of its own.
+
 ## Roadmap
 
 0. Domain + tests (done)

@@ -41,8 +41,7 @@ public static class CashForecast
         IEnumerable<CardBillPaymentLink>? cardBillLinks = null,
         IEnumerable<CardBillAdjustment>? cardBillAdjustments = null)
     {
-        var accountList = accounts.ToList();
-        var all = transactions.ToList();
+        var (accountList, all) = CardFamilies.Fold(accounts, transactions);
         var items = PaymentSchedule.Build(accountList, all, payables, today, settlements, cardBillLinks, cardBillAdjustments).ToList();
 
         var cards = accountList

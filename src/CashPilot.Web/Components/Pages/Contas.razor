@@ -36,6 +36,19 @@
 
         @if (_form.Kind == AccountKind.CreditCard)
         {
+            <label>Cartão adicional de
+                <select @bind="_form.ParentCard">
+                    <option value="">Não é adicional (cartão principal)</option>
+                    @foreach (var main in MainCards)
+                    {
+                        <option value="@main.Name">@main.Name</option>
+                    }
+                </select>
+            </label>
+        }
+
+        @if (_form.Kind == AccountKind.CreditCard && string.IsNullOrEmpty(_form.ParentCard))
+        {
             <label>Limite (R$) <input @bind="_form.CreditLimit" data-money="brl" inputmode="numeric" placeholder="R$ 0,00" /></label>
             <label>Dia de fechamento <input type="number" min="1" max="31" @bind="_form.ClosingDay" /></label>
             <label>Dia de vencimento <input type="number" min="1" max="31" @bind="_form.DueDay" /></label>
@@ -88,7 +101,7 @@
         </table>
     }
 
-    @if (_accounts.Any(a => a.Kind == AccountKind.CreditCard && a.RevolvingMonthlyRatePercent is null))
+    @if (_accounts.Any(a => a.Kind == AccountKind.CreditCard && a.RevolvingMonthlyRatePercent is null && string.IsNullOrWhiteSpace(a.ParentCard)))
     {
         <p class="muted">
             Há cartões sem a taxa do rotativo. As taxas conhecidas (de faturas de setembro/2026) podem ser preenchidas de uma vez; as marcadas
@@ -124,6 +137,7 @@
         public string OverdraftRate { get; set; } = "";
         public string RevolvingRate { get; set; } = "";
         public string InstallmentRate { get; set; } = "";
+        public string ParentCard { get; set; } = "";
     }
 
     private Form _form = new();
@@ -132,6 +146,13 @@
     private string? _error;
     private IReadOnlyList<Account> _accounts = Array.Empty<Account>();
     private List<string> _unregistered = new();
+
+    /// <summary>The cards an additional card can belong to: other cards that are not additional themselves.</summary>
+    private IEnumerable<Account> MainCards => _accounts.Where(a =>
+        a.Kind == AccountKind.CreditCard
+        && string.IsNullOrWhiteSpace(a.ParentCard)
+        && !string.Equals(a.Name, _originalName, StringComparison.OrdinalIgnoreCase)
+        && !string.Equals(a.Name, _form.Name?.Trim(), StringComparison.OrdinalIgnoreCase));
 
     protected override void OnInitialized() => Reload();
 
@@ -166,6 +187,12 @@
         if (!ValidDay(_form.ClosingDay) || !ValidDay(_form.DueDay)) { _error = "Dias devem ficar entre 1 e 31."; return; }
 
         var card = _form.Kind == AccountKind.CreditCard;
+        var additional = card && !string.IsNullOrEmpty(_form.ParentCard);
+        if (additional && _accounts.Any(a => string.Equals(a.ParentCard, _originalName, StringComparison.OrdinalIgnoreCase) && _editing))
+        {
+            _error = "Este cartão tem adicionais ligados a ele: mude ou desligue os adicionais antes de torná-lo adicional.";
+            return;
+        }
         var bank = _form.Kind == AccountKind.BankAccount;
         var name = _form.Name.Trim();
         if (_editing && name != _originalName)
@@ -185,11 +212,13 @@
         {
             Name = name,
             Kind = _form.Kind,
-            CreditLimit = card ? creditLimit : null,
-            ClosingDay = card ? _form.ClosingDay : null,
-            DueDay = card ? _form.DueDay : null,
-            RevolvingMonthlyRatePercent = card ? revolvingRate : null,
-            InstallmentMonthlyRatePercent = card ? installmentRate : null,
+            // An additional card is billed with its main card: it has no limit, dates or rates of its own.
+            ParentCard = additional ? _form.ParentCard : null,
+            CreditLimit = card && !additional ? creditLimit : null,
+            ClosingDay = card && !additional ? _form.ClosingDay : null,
+            DueDay = card && !additional ? _form.DueDay : null,
+            RevolvingMonthlyRatePercent = card && !additional ? revolvingRate : null,
+            InstallmentMonthlyRatePercent = card && !additional ? installmentRate : null,
             OverdraftLimit = bank ? overdraftLimit : null,
             OverdraftFreeDays = bank ? _form.OverdraftFreeDays : null,
             OverdraftMonthlyRatePercent = bank ? rate : null,
@@ -216,6 +245,7 @@
             OverdraftRate = account.OverdraftMonthlyRatePercent?.ToString("N2", Br) ?? "",
             RevolvingRate = account.RevolvingMonthlyRatePercent?.ToString("N2", Br) ?? "",
             InstallmentRate = account.InstallmentMonthlyRatePercent?.ToString("N2", Br) ?? "",
+            ParentCard = account.ParentCard ?? "",
         };
     }
 
@@ -276,8 +306,9 @@
         _ => "Outro",
     };
 
-    private static string Details(Account a) => a.Kind switch
+    private string Details(Account a) => a.Kind switch
     {
+        AccountKind.CreditCard when !string.IsNullOrWhiteSpace(a.ParentCard) => $"adicional de {a.ParentCard} (entra na fatura dele)",
         AccountKind.CreditCard => string.Join(" · ", new[]
         {
             a.CreditLimit is { } l ? $"limite R$ {l.ToString("N2", Br)}" : null,
@@ -285,6 +316,9 @@
             a.DueDay is { } d ? $"vence dia {d}" : null,
             a.RevolvingMonthlyRatePercent is { } rv ? $"rotativo {rv.ToString("N2", Br)}% ao mês" : null,
             a.InstallmentMonthlyRatePercent is { } iv ? $"parcelamento {iv.ToString("N2", Br)}% ao mês" : null,
+            _accounts.Where(c => string.Equals(c.ParentCard, a.Name, StringComparison.OrdinalIgnoreCase)).Select(c => c.Name).ToList() is { Count: > 0 } extras
+                ? "adicionais: " + string.Join(", ", extras)
+                : null,
         }.Where(x => x is not null)),
         AccountKind.BankAccount => string.Join(" · ", new[]
         {

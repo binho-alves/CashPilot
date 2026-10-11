@@ -143,6 +143,11 @@ internal static class Schema
             PRIMARY KEY (card, closing)
         );
         """,
+
+        // v12: additional cards. Name of the main card; its entries are billed with the main card.
+        """
+        ALTER TABLE accounts ADD COLUMN parent_card TEXT NULL;
+        """,
     ];
 
     public static void Apply(SqliteConnection connection)
