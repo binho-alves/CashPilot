@@ -1,0 +1,36 @@
+@* Vertical bars, one per label. The last bar is highlighted. Pure SVG; hover a bar to see its value. *@
+@{
+    var w = 640.0; var h = 230.0;
+    var left = 62.0; var right = 12.0; var top = 12.0; var bottom = 26.0;
+    var plotW = w - left - right; var plotH = h - top - bottom;
+    var max = ChartMath.NiceMax(Values.Count == 0 ? 0 : Values.Max());
+    var slot = Values.Count == 0 ? plotW : plotW / Values.Count;
+    var barW = slot * 0.56;
+    double Y(decimal v) => top + plotH - (double)(v / max) * plotH;
+}
+<svg class="chart" viewBox="0 0 @ChartMath.F(w) @ChartMath.F(h)" role="img" aria-label="@Title">
+    @for (var t = 0; t <= 4; t++)
+    {
+        var value = max * t / 4;
+        var y = Y(value);
+        <line class="grid-line" x1="@ChartMath.F(left)" x2="@ChartMath.F(w - right)" y1="@ChartMath.F(y)" y2="@ChartMath.F(y)" />
+        @ChartMath.Text(left - 8, y + 4, "end", "axis", ChartMath.Short(value))
+    }
+    @for (var i = 0; i < Values.Count; i++)
+    {
+        var x = left + i * slot + (slot - barW) / 2;
+        var y = Y(Values[i]);
+        var height = Math.Max(Values[i] > 0 ? 2.0 : 0.0, top + plotH - y);
+        <rect class="@(i == Values.Count - 1 ? "bar-rect last" : "bar-rect")" x="@ChartMath.F(x)" y="@ChartMath.F(top + plotH - height)"
+              width="@ChartMath.F(barW)" height="@ChartMath.F(height)" rx="3">
+            <title>@Labels[i]: @ChartMath.Money(Values[i])</title>
+        </rect>
+        @ChartMath.Text(left + i * slot + slot / 2, h - 6, "middle", "axis", Labels[i])
+    }
+</svg>
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<string> Labels { get; set; } = [];
+    [Parameter, EditorRequired] public IReadOnlyList<decimal> Values { get; set; } = [];
+    [Parameter] public string Title { get; set; } = "Gráfico";
+}

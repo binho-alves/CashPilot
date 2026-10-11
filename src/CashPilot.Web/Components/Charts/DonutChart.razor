@@ -1,0 +1,46 @@
+@* Donut with a legend (label, share). Colors come from --s1..--s6 in app.css. *@
+@{
+    const double radius = 70.0;
+    var circumference = 2 * Math.PI * radius;
+    var total = Items.Sum(i => i.Value);
+    var offset = 0.0;
+}
+<div class="donut-wrap">
+    <svg class="donut" viewBox="0 0 200 200" role="img" aria-label="@Title">
+        <circle cx="100" cy="100" r="@ChartMath.F(radius)" class="donut-track" />
+        @for (var i = 0; i < Items.Count; i++)
+        {
+            var share = total > 0 ? (double)(Items[i].Value / total) : 0;
+            var length = share * circumference;
+            if (length <= 0) { continue; }
+            <circle cx="100" cy="100" r="@ChartMath.F(radius)" class="@($"donut-slice s{i + 1}")"
+                    stroke-dasharray="@ChartMath.F(Math.Max(length - 1.5, 0.5)) @ChartMath.F(circumference)"
+                    stroke-dashoffset="@ChartMath.F(-offset)" transform="rotate(-90 100 100)">
+                <title>@Items[i].Label: @ChartMath.Money(Items[i].Value)</title>
+            </circle>
+            offset += length;
+        }
+        @ChartMath.Text(100, 98, "middle", "donut-value", CenterValue)
+        @ChartMath.Text(100, 116, "middle", "donut-caption", CenterCaption)
+    </svg>
+    <ul class="legend">
+        @for (var i = 0; i < Items.Count; i++)
+        {
+            var share = total > 0 ? Items[i].Value / total : 0;
+            <li>
+                <span class="@($"dot s{i + 1}")"></span>
+                <span class="legend-label">@Items[i].Label</span>
+                <span class="legend-share">@share.ToString("P1", new CultureInfo("pt-BR"))</span>
+            </li>
+        }
+    </ul>
+</div>
+
+@code {
+    public sealed record Slice(string Label, decimal Value);
+
+    [Parameter, EditorRequired] public IReadOnlyList<Slice> Items { get; set; } = [];
+    [Parameter] public string CenterValue { get; set; } = "";
+    [Parameter] public string CenterCaption { get; set; } = "";
+    [Parameter] public string Title { get; set; } = "Gráfico";
+}

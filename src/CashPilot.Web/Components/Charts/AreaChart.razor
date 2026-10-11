@@ -1,0 +1,47 @@
+@* Line over a soft area, one value per label. Pure SVG; hover a point to see its value. *@
+@{
+    var w = 640.0; var h = 230.0;
+    var left = 62.0; var right = 12.0; var top = 12.0; var bottom = 26.0;
+    var plotW = w - left - right; var plotH = h - top - bottom;
+    var max = ChartMath.NiceMax(Values.Count == 0 ? 0 : Values.Max());
+    double X(int i) => Values.Count <= 1 ? left + plotW / 2 : left + i * plotW / (Values.Count - 1);
+    double Y(decimal v) => top + plotH - (double)(v / max) * plotH;
+    var line = string.Join(" ", Values.Select((v, i) => (i == 0 ? "M" : "L") + ChartMath.F(X(i)) + " " + ChartMath.F(Y(v))));
+    var baseline = ChartMath.F(top + plotH);
+    var area = Values.Count == 0 ? "" : line + " L" + ChartMath.F(X(Values.Count - 1)) + " " + baseline + " L" + ChartMath.F(X(0)) + " " + baseline + " Z";
+    var gradient = "g" + Id;
+}
+<svg class="chart" viewBox="0 0 @ChartMath.F(w) @ChartMath.F(h)" role="img" aria-label="@Title">
+    <defs>
+        <linearGradient id="@gradient" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="var(--accent)" stop-opacity=".35" />
+            <stop offset="100%" stop-color="var(--accent)" stop-opacity="0" />
+        </linearGradient>
+    </defs>
+    @for (var t = 0; t <= 4; t++)
+    {
+        var value = max * t / 4;
+        var y = Y(value);
+        <line class="grid-line" x1="@ChartMath.F(left)" x2="@ChartMath.F(w - right)" y1="@ChartMath.F(y)" y2="@ChartMath.F(y)" />
+        @ChartMath.Text(left - 8, y + 4, "end", "axis", ChartMath.Short(value))
+    }
+    @if (Values.Count > 0)
+    {
+        <path d="@area" fill="url(#@gradient)" />
+        <path d="@line" class="series-line" />
+        @for (var i = 0; i < Values.Count; i++)
+        {
+            <circle class="point" cx="@ChartMath.F(X(i))" cy="@ChartMath.F(Y(Values[i]))" r="4">
+                <title>@Labels[i]: @ChartMath.Money(Values[i])</title>
+            </circle>
+            @ChartMath.Text(X(i), h - 6, "middle", "axis", Labels[i])
+        }
+    }
+</svg>
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<string> Labels { get; set; } = [];
+    [Parameter, EditorRequired] public IReadOnlyList<decimal> Values { get; set; } = [];
+    [Parameter] public string Title { get; set; } = "Gráfico";
+    [Parameter] public string Id { get; set; } = "area";
+}

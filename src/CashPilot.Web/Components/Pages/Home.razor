@@ -3,7 +3,7 @@
 
 <PageTitle>Resumo — CashPilot</PageTitle>
 
-<h1>Resumo do mês</h1>
+<h1>Resumo</h1>
 
 @if (_months.Count == 0)
 {
@@ -25,25 +25,50 @@ else
 
     @if (Selected is { } selected)
     {
-        <div class="cards">
-            <div class="card">
-                <span class="muted">Gasto no mês</span>
-                <strong>@Money(selected.Total)</strong>
-            </div>
-            <div class="card">
-                <span class="muted">Lançamentos</span>
-                <strong>@selected.Count</strong>
-            </div>
-            <div class="card @(selected.Uncategorized > 0 ? "warn" : "")">
-                <span class="muted">Sem categoria</span>
-                <strong>@Money(selected.Uncategorized)</strong>
-                @if (selected.Uncategorized > 0)
-                {
-                    <a href="pendentes">classificar</a>
-                }
-            </div>
+        <div class="kpis">
+            <KpiCard Icon="wallet" Label="Gasto no mês" Value="@Money(selected.Total)"
+                     Note="@DeltaText(selected.Total, _previous?.Total, "mês anterior")" NoteClass="@DeltaClass(selected.Total, _previous?.Total)" />
+            <KpiCard Icon="trend" Label="Média dos 3 meses anteriores" Value="@Money(_average)"
+                     Note="@DeltaText(selected.Total, _average > 0 ? _average : null, "a média")" NoteClass="@DeltaClass(selected.Total, _average > 0 ? _average : null)" />
+            <KpiCard Icon="list" Label="Lançamentos" Value="@selected.Count.ToString()" />
+            <KpiCard Icon="alert" Label="Sem categoria" Value="@Money(selected.Uncategorized)"
+                     Note="@(selected.Uncategorized > 0 ? "classificar em Pendentes" : "tudo classificado")"
+                     NoteClass="@(selected.Uncategorized > 0 ? "bad" : "good")" />
         </div>
 
+        <div class="dash-row wide-left">
+            <section class="panel">
+                <h2>Gasto mensal <span class="muted">últimos 12 meses</span></h2>
+                <AreaChart Labels="_trendLabels" Values="_trendValues" Title="Gasto mensal" Id="trend" />
+            </section>
+            <section class="panel">
+                <h2>Gasto por categoria <span class="muted">@Label(selected)</span></h2>
+                <DonutChart Items="_slices" CenterValue="@Money(selected.Total)" CenterCaption="no mês" Title="Gasto por categoria" />
+            </section>
+        </div>
+
+        <div class="dash-row wide-left">
+            <section class="panel">
+                <h2>Juros e encargos <span class="muted">por mês, últimos 12 meses</span></h2>
+                <BarChart Labels="_trendLabels" Values="_interestValues" Title="Juros e encargos por mês" />
+            </section>
+            <section class="panel">
+                <h2>Maiores gastos <span class="muted">@Label(selected)</span></h2>
+                <ol class="ranking">
+                    @foreach (var (line, index) in _top.Select((l, i) => (l, i + 1)))
+                    {
+                        <li>
+                            <span class="rank">@index</span>
+                            <span class="rank-name">@(line.Item.Length > 0 ? line.Item : line.Category)<small class="muted">@(line.Item.Length > 0 ? line.Category : "")</small></span>
+                            <span class="rank-value">@Money(line.Total)</span>
+                        </li>
+                    }
+                </ol>
+            </section>
+        </div>
+
+        <section class="panel">
+            <h2>Categorias do mês <span class="muted">clique para ver os itens</span></h2>
         <table class="grid">
             <thead>
                 <tr><th>Categoria</th><th class="num">Total</th><th class="num">%</th><th></th></tr>
@@ -72,6 +97,7 @@ else
                 }
             </tbody>
         </table>
+        </section>
     }
 }
 
@@ -88,6 +114,14 @@ else
     private string _selectedKey = "";
     private readonly HashSet<string> _open = new();
 
+    private MonthlySpending? _previous;
+    private decimal _average;
+    private IReadOnlyList<string> _trendLabels = Array.Empty<string>();
+    private IReadOnlyList<decimal> _trendValues = Array.Empty<decimal>();
+    private IReadOnlyList<decimal> _interestValues = Array.Empty<decimal>();
+    private IReadOnlyList<DonutChart.Slice> _slices = Array.Empty<DonutChart.Slice>();
+    private IReadOnlyList<SpendingLine> _top = Array.Empty<SpendingLine>();
+
     private MonthlySpending? Selected => _months.FirstOrDefault(m => Key(m) == _selectedKey);
 
     protected override void OnInitialized()
@@ -98,18 +132,70 @@ else
         var current = _months.LastOrDefault(m => m.Year * 12 + m.Month <= today.Year * 12 + today.Month)
                       ?? _months.LastOrDefault();
         _selectedKey = current is null ? "" : Key(current);
+        BuildDashboard();
     }
 
     private void OnMonthChanged(ChangeEventArgs e)
     {
         _selectedKey = e.Value?.ToString() ?? "";
         _open.Clear();
+        BuildDashboard();
     }
 
     private void Toggle(string category)
     {
         if (!_open.Remove(category)) _open.Add(category);
     }
+
+    private MonthlySpending? Find(int year, int month) => _months.FirstOrDefault(m => m.Year == year && m.Month == month);
+
+    /// <summary>Everything the charts show for the selected month; recomputed only when the month changes.</summary>
+    private void BuildDashboard()
+    {
+        if (Selected is not { } selected) return;
+
+        // The 12 months ending at the selected one; a month with no entries counts as zero.
+        var labels = new List<string>();
+        var totals = new List<decimal>();
+        var interest = new List<decimal>();
+        for (var back = 11; back >= 0; back--)
+        {
+            var index = selected.Year * 12 + (selected.Month - 1) - back;
+            var year = index / 12;
+            var month = index % 12 + 1;
+            var found = Find(year, month);
+            labels.Add(ChartMath.ShortMonths[month - 1]);
+            totals.Add(found?.Total ?? 0m);
+            interest.Add(found?.Lines.Where(l => l.Category.StartsWith("Juros", StringComparison.OrdinalIgnoreCase)).Sum(l => l.Total) ?? 0m);
+        }
+        _trendLabels = labels;
+        _trendValues = totals;
+        _interestValues = interest;
+
+        var before = selected.Year * 12 + (selected.Month - 1) - 1;
+        _previous = Find(before / 12, before % 12 + 1);
+        var lastThree = totals.Skip(8).Take(3).ToList();   // the three months right before the selected one (index 11)
+        _average = lastThree.Count == 3 && lastThree.Any(v => v > 0) ? lastThree.Average() : 0m;
+
+        var groups = Groups(selected).Where(g => g.Total > 0).ToList();
+        var slices = groups.Take(5).Select(g => new DonutChart.Slice(g.Name, g.Total)).ToList();
+        var rest = groups.Skip(5).Sum(g => g.Total);
+        if (rest > 0) slices.Add(new DonutChart.Slice("Outros", rest));
+        _slices = slices;
+
+        _top = selected.Lines.OrderByDescending(l => l.Total).Take(5).ToList();
+    }
+
+    /// <summary>"▲ 12,4% vs mês anterior" (spending up is bad, so up is the warning color).</summary>
+    private static string? DeltaText(decimal now, decimal? before, string against)
+    {
+        if (before is not { } b || b <= 0) return null;
+        var change = (now - b) / b;
+        return $"{(change >= 0 ? "▲" : "▼")} {Math.Abs(change).ToString("P1", Br)} vs {against}";
+    }
+
+    private static string DeltaClass(decimal now, decimal? before) =>
+        before is not { } b || b <= 0 ? "" : now > b ? "bad" : "good";
 
     private static string Key(MonthlySpending m) => $"{m.Year}-{m.Month:00}";
 

@@ -36,6 +36,9 @@ The real spreadsheet and statements contain personal data. This repo is **public
 - `src/CashPilot.Cli` — `import-gastos`, `apply-rules`, `mark-cashout`, `report`, `pending`, `classify`, `stats`; default DB `data/cashpilot.db` (git-ignored)
 - `tests/CashPilot.Domain.Tests`, `tests/CashPilot.Infrastructure.Tests` — xUnit (`:memory:` SQLite)
 
+## Visual design (web)
+Dark, warm "Claude-like" theme, defined only by the CSS tokens at the top of `wwwroot/app.css` (`--bg/--panel/--text/--accent` terracotta, `--s1..--s6` chart series): change the tokens, every page follows. The Resumo page is a dashboard (KPI cards, 12-month trend, donut by category, interest bars, top spends) built from small SVG components in `Components/Charts` (`KpiCard`, `AreaChart`, `BarChart`, `DonutChart`, `ChartMath`), no JavaScript chart library. SVG `<text>` inside a Razor loop is dropped by Razor (it is its own tag), so labels go through `ChartMath.Text`. Dark only for now (no light variant). Written without a compiler: the user checks it in the browser.
+
 ## Report
 `SpendingReport` (Domain/Reports): spending = Expense (and Undefined outflows); excluded = InternalTransfer, CardBillPayment, CardCashAdvance. A categorized inflow (refund) reduces its category; an uncategorized inflow is ignored. Uncategorized spending is shown separately, never dropped. The sheet's `Principal` tab only sums rows that have a category, so its monthly totals will not match this report; the gap is the uncategorized rows plus anything excluded above.
 
