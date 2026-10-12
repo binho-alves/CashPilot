@@ -39,6 +39,14 @@ O banco fica em `data/cashpilot.db` (mude com `--db`). Importar o mesmo arquivo 
 O cartão é cobrado pelo valor bruto, a conta recebe o líquido, e a diferença é a despesa.
 R$ 1.000 a 3,09% (1x): custo R$ 30,90, líquido R$ 969,10. A tabela de taxas por parcela (`CashAdvanceFeeTable`) já vem com as taxas de crédito da maquininha, de 1x a 12x (3,09% a 12,38%).
 
+## Leitura de fatura em imagem
+
+Prints e PDFs de fatura que são só imagem são lidos localmente por OCR. Para uma leitura mais precisa, configure `CashPilot:AnthropicApiKey` (user-secrets): a página Importar passa a mostrar o botão "Ler com IA", que envia a imagem à API da Anthropic somente quando você clica.
+
+## Pasta de faturas
+
+Configure `CashPilot:InboxFolder` com uma pasta (por exemplo, uma pasta do Google Drive espelhada pelo Drive para computador) com uma subpasta por conta ou cartão, com o mesmo nome. Os arquivos jogados lá (PDF, print, texto) são lidos em segundo plano e ficam numa fila na página Importar para você conferir antes de importar.
+
 ## Cartões adicionais
 
 Ao cadastrar um cartão de crédito você pode marcá-lo como adicional e escolher de qual cartão ele é. A fatura do cartão principal soma os lançamentos dos dois; o adicional não tem fatura própria.
@@ -53,7 +61,7 @@ Ao cadastrar um cartão de crédito você pode marcá-lo como adicional e escolh
 - Cheque especial (LIS) por conta: dias sem juros e taxa de juros
 - Calendário de vencimentos e simulador de custo (feitos: LIS, saque na maquininha e atrasar um boleto, com a multa e os juros de mora cadastrados em cada boleto; mais o rotativo do cartão, com a taxa de cada cartão cadastrada em Contas e o IOF, e atrasar a fatura com multa de 2% e mora de 1% ao mês)
 - Importação de extratos (OFX de qualquer banco, CSV e PDF do Bradesco, PDF do Itaú) com prévia antes de gravar, sem duplicar e reconhecendo transferências entre as suas contas; faltam PDFs de outros bancos
-- Imagens de fatura/extrato (prints do app) lidas por OCR local e gratuito (Tesseract; precisa de `data/tessdata/por.traineddata`, fora do git); o texto lido aparece para você revisar antes de importar
+- Imagens de fatura/extrato (prints do app) lidas por OCR local e gratuito (Tesseract; precisa de `data/tessdata/por.traineddata` e, para ler melhor datas e números, `eng.traineddata`; fora do git); o texto lido aparece para você revisar antes de importar
 - Pagamento de fatura casado com a fatura (mesmo valor, feito entre o fechamento e 10 dias depois do vencimento): fatura paga sai de "O que falta pagar" e do calendário, e a tela mostra as faturas recentes e os pagamentos sem fatura; quando o valor não bate, dá para marcar a fatura como paga à mão (isso só a tira da lista, sem lançar o pagamento)
 - Parcelas futuras: a partir da última parcela já importada de cada compra no cartão, mostra o que ainda vai cair em cada fatura (por mês de vencimento) e quanto já está comprometido
 - Comparativo mensal: gasto por categoria no mês contra o mês anterior e a média recente, destacando as categorias que subiram bastante

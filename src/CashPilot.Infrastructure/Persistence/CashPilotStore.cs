@@ -29,6 +29,9 @@ public enum RuleKind
 /// <summary>A rule as stored, with its row id so the UI can delete it.</summary>
 public sealed record StoredRule(long Id, RuleKind Kind, string Pattern, Classification Classification);
 
+/// <summary>A file from the watched folder. Status: pending (read, waiting for the check), failed, imported or dismissed.</summary>
+public sealed record InboxItem(long Id, string Account, string FileName, string Status, string Text, int Entries, string? Note, string CreatedAt);
+
 public sealed class CashPilotStore : IDisposable
 {
     private readonly SqliteConnection _connection;
@@ -1039,6 +1042,67 @@ public sealed class CashPilotStore : IDisposable
             });
         }
         return result;
+    }
+
+    // ---- Folder inbox: files found in the watched folder, waiting for the user's check ----
+
+    /// <summary>Adds a file read from the watched folder. Returns false when a file with the same content is already known.</summary>
+    public bool AddInboxItem(string account, string fileName, string fileHash, string status, string text, int entries, string? note)
+    {
+        using var command = CreateCommand("""
+            INSERT OR IGNORE INTO inbox_items (account, file_name, file_hash, status, text, entries, note, created_at)
+            VALUES ($account, $file, $hash, $status, $text, $entries, $note, $created);
+            """);
+        command.Parameters.AddWithValue("$account", account);
+        command.Parameters.AddWithValue("$file", fileName);
+        command.Parameters.AddWithValue("$hash", fileHash);
+        command.Parameters.AddWithValue("$status", status);
+        command.Parameters.AddWithValue("$text", text);
+        command.Parameters.AddWithValue("$entries", entries);
+        command.Parameters.AddWithValue("$note", (object?)note ?? DBNull.Value);
+        command.Parameters.AddWithValue("$created", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture));
+        return command.ExecuteNonQuery() > 0;
+    }
+
+    public bool InboxHashKnown(string fileHash)
+    {
+        using var command = CreateCommand("SELECT 1 FROM inbox_items WHERE file_hash = $hash;");
+        command.Parameters.AddWithValue("$hash", fileHash);
+        return command.ExecuteScalar() is not null;
+    }
+
+    /// <summary>Items waiting for the user: status "pending" (ready to check) and "failed" (could not be read, with the reason).</summary>
+    public IReadOnlyList<InboxItem> GetOpenInboxItems()
+    {
+        var result = new List<InboxItem>();
+        using var command = CreateCommand("""
+            SELECT id, account, file_name, status, text, entries, note, created_at
+            FROM inbox_items WHERE status IN ('pending', 'failed') ORDER BY id;
+            """);
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            result.Add(new InboxItem(
+                reader.GetInt64(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4),
+                reader.GetInt32(5), reader.IsDBNull(6) ? null : reader.GetString(6), reader.GetString(7)));
+        }
+        return result;
+    }
+
+    /// <summary>Removes an item the user dismissed, so the same file can enter the queue again if it is dropped again.</summary>
+    public void DeleteInboxItem(long id)
+    {
+        using var command = CreateCommand("DELETE FROM inbox_items WHERE id = $id AND status IN ('pending', 'failed');");
+        command.Parameters.AddWithValue("$id", id);
+        command.ExecuteNonQuery();
+    }
+
+    public void SetInboxStatus(long id, string status)
+    {
+        using var command = CreateCommand("UPDATE inbox_items SET status = $status WHERE id = $id;");
+        command.Parameters.AddWithValue("$status", status);
+        command.Parameters.AddWithValue("$id", id);
+        command.ExecuteNonQuery();
     }
 
     private static string? NullableString(SqliteDataReader reader, string column)

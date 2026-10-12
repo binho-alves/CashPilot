@@ -46,6 +46,14 @@ The database is created at `data/cashpilot.db` (override with `--db`). Importing
 The card is charged the gross amount, the account receives the net, and the difference is the expense.
 R$ 1,000 at 3.09% (1x): cost R$ 30.90, net R$ 969.10. The fee table by number of installments (`CashAdvanceFeeTable`) ships with the terminal's credit fees for 1x to 12x (3.09% to 12.38%).
 
+## Reading card bill pictures
+
+Screenshots and image-only PDFs of a card bill are read locally with OCR. For a more accurate reading you can set `CashPilot:AnthropicApiKey` (user-secrets); Importar then shows a "Ler com IA" button that sends the picture to the Anthropic API, only when pressed.
+
+## Folder inbox
+
+Set `CashPilot:InboxFolder` to a folder (for example a Google Drive folder mirrored by Drive for desktop) with one subfolder per account or card, named like the account. Files dropped there (PDF, screenshot, text) are read in the background and queued on the Importar page for you to check before they are imported.
+
 ## Additional cards
 
 When registering a credit card you can mark it as an additional card and pick the main card it belongs to. The main card's bill then sums the entries of both cards; the additional card has no bill of its own.
@@ -57,7 +65,7 @@ When registering a credit card you can mark it as an additional card and pick th
 2. Accounts, limits, bills and per-account interest rules
    - "Bills to pay" screen: everything due, shown next to the bank accounts and balances (where to take the money from)
    - Overdraft (LIS) settings per account: interest-free days and interest rate
-   - Statement import with preview (OFX from any bank, Bradesco CSV/PDF, Itaú PDF), local OCR for card-bill/statement screenshots (Tesseract; needs `data/tessdata/por.traineddata`, git-ignored; text is reviewed before importing); other bank PDF layouts next, transfer pairing between own accounts, soft delete
+   - Statement import with preview (OFX from any bank, Bradesco CSV/PDF, Itaú PDF), local OCR for card-bill/statement screenshots (Tesseract; needs `data/tessdata/por.traineddata`, and `eng.traineddata` for better dates and digits; both git-ignored; text is reviewed before importing); other bank PDF layouts next, transfer pairing between own accounts, soft delete
 3. Payment calendar, cash-flow forecast and cost simulator
 4. Phone app (Android, .NET MAUI) over the home network: type entries, offline queue, no duplicates — see [docs/phase4.md](docs/phase4.md)
 

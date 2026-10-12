@@ -21,6 +21,15 @@ builder.Services.AddSingleton(new CashPilot.Web.DatabaseLocation(databasePath));
 builder.Services.AddSingleton(new CashPilot.Infrastructure.Importing.ImageTextReader(
     Path.Combine(Path.GetDirectoryName(databasePath) ?? ".", "tessdata")));
 
+// One long-lived HttpClient (the recommended way for a singleton); the key is optional and only used when the user presses "Ler com IA".
+builder.Services.AddSingleton(_ => new CashPilot.Infrastructure.Importing.ClaudeBillReader(
+    new HttpClient { Timeout = TimeSpan.FromMinutes(3) },
+    builder.Configuration["CashPilot:AnthropicApiKey"], builder.Configuration["CashPilot:AnthropicModel"]));
+
+// Watches CashPilot:InboxFolder (one subfolder per account) and queues bills for the user to check; does nothing when the folder is not set.
+builder.Services.AddSingleton<CashPilot.Web.InboxService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<CashPilot.Web.InboxService>());
+
 var app = builder.Build();
 
 // Today's copy of the database, taken before the app opens (and possibly migrates) it.

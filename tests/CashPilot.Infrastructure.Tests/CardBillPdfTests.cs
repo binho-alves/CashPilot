@@ -133,4 +133,69 @@ public class CardBillPdfTests
     [Fact]
     public void OcrTextWithoutBillLinesGivesNothing() =>
         Assert.Null(CardBillPdf.FromOcrText("Aplicativo Bradesco\nTotal para: FABIO R ALVES"));
+
+    [Fact]
+    public void OcrLinesWithADamagedDateAreStillRead()
+    {
+        var result = CardBillPdf.FromOcrText("0810 LOJA ALFA USD 0,00 R$ 0,00 R$ 35,05\nO7/1O LOJA BETA USD 0,00 R$ 0,00 R$ 10,00");
+
+        Assert.NotNull(result);
+        Assert.Equal(2, result!.Entries);
+        Assert.Equal("08/10 LOJA ALFA R$ 35,05\n07/10 LOJA BETA R$ 10,00\n", result.Text);
+    }
+
+    [Fact]
+    public void ADateWhoseMonthIsLostIsRebuiltFromTheNeighborLines()
+    {
+        // What the Portuguese "fast" model gave for a real screenshot: "08M0" instead of "08/10", bars between the columns.
+        var result = CardBillPdf.FromOcrText(string.Join("\n",
+            "08M0 | LOJA ALFA USD 0,00 R$0,00 R$ 35,05",
+            "0710 | LOJA BETA USD 0,00 R$0,00 R$ 103,89",
+            "070 | LOJA GAMA USD 0,00 R$0,00 R$ 43,29",
+            "0340 | LOJA DELTA USD 0,00 R$ 0,00 R$ 166,11"));
+
+        Assert.NotNull(result);
+        Assert.Equal(4, result!.Entries);
+        Assert.Equal(3, result.Repaired);
+        Assert.Equal(string.Join("\n",
+            "08/10 LOJA ALFA R$ 35,05",
+            "07/10 LOJA BETA R$ 103,89",
+            "07/10 LOJA GAMA R$ 43,29",
+            "03/10 LOJA DELTA R$ 166,11") + "\n", result.Text);
+    }
+
+    [Fact]
+    public void ADamagedDateFarFromEveryNeighborIsMarkedForTheUserInsteadOfGuessed()
+    {
+        var result = CardBillPdf.FromOcrText(string.Join("\n",
+            "0710 LOJA BETA USD 0,00 R$ 0,00 R$ 103,89",
+            "28M0 LOJA GAMA USD 0,00 R$ 0,00 R$ 43,29"));
+
+        Assert.Equal("07/10 LOJA BETA R$ 103,89\n28/?? LOJA GAMA R$ 43,29\n", result!.Text);
+        Assert.Equal(0, result.Repaired);
+    }
+
+    [Fact]
+    public void AListGroupedByDayWithTheMonthUnderTheDayIsRead()
+    {
+        // What OCR gives for a bank app list: day on the first purchase, month name under it, timeline dots, arrows.
+        var result = CardBillPdf.FromOcrText(string.Join("\n",
+            "Data Descrição Valor",
+            "10 o LOJA ALFA R$ 15,99 >",
+            "Out",
+            "O LOJA BETA RS 88,99 >",
+            "Oo LOJA GAMA R$ 1.500,00 >",
+            "09 © LOJA DELTA R$ 20,00 >",
+            "O LOJA EPSILON R$ 30,00 >"));
+
+        Assert.NotNull(result);
+        Assert.Equal(5, result!.Entries);
+        Assert.Equal(string.Join("\n",
+            "10/10 LOJA ALFA R$ 15,99",
+            "10/10 LOJA BETA R$ 88,99",
+            "10/10 LOJA GAMA R$ 1.500,00",
+            "09/10 LOJA DELTA R$ 20,00",
+            "09/10 LOJA EPSILON R$ 30,00") + "\n", result.Text);
+        Assert.Equal(2, result.Repaired);   // the second day has no month name of its own: taken from the day above
+    }
 }

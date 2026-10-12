@@ -5,10 +5,68 @@
 @inject CashPilotStore Store
 @inject ToastService Toasts
 @inject ImageTextReader ImageReader
+@inject ClaudeBillReader Claude
+@inject InboxService Inbox
+@implements IDisposable
 
 <PageTitle>Importar — CashPilot</PageTitle>
 
 <h1>Importar</h1>
+
+@if (Inbox.Enabled || _inbox.Count > 0)
+{
+    <section class="card-box wide">
+        <h2>Faturas da pasta</h2>
+        <p class="muted">
+            @if (Inbox.Enabled)
+            {
+                <span>Pasta vigiada: <code>@Inbox.Folder</code>. Cada subpasta tem o nome de uma conta ou cartão; o que você joga nela é lido aqui e fica nesta fila até você conferir e importar.</span>
+            }
+            else
+            {
+                <span>A pasta vigiada não está configurada (<code>CashPilot:InboxFolder</code>); ficaram estes itens de antes.</span>
+            }
+        </p>
+        @if (Inbox.Enabled)
+        {
+            <p>
+                <button @onclick="ScanInbox" disabled="@_inboxBusy">@(_inboxBusy ? "Verificando…" : "Verificar agora")</button>
+                <span class="muted"> @Inbox.LastMessage @(Inbox.LastScan is { } at ? $"(às {at:HH:mm})" : "")</span>
+            </p>
+        }
+        @if (_inboxError is not null)
+        {
+            <p class="error">@_inboxError</p>
+        }
+        @if (_inbox.Count == 0)
+        {
+            <p class="muted">Nada esperando conferência.</p>
+        }
+        @foreach (var item in _inbox)
+        {
+            <div class="inbox-item">
+                <h3>@item.Account <span class="muted">· @item.FileName · @item.CreatedAt</span></h3>
+                @if (item.Note is not null)
+                {
+                    <p class="muted">@item.Note</p>
+                }
+                @if (item.Status == "pending")
+                {
+                    <textarea class="paste" rows="8" value="@InboxText(item)"
+                              @oninput="e => _inboxEdits[item.Id] = e.Value?.ToString() ?? string.Empty"></textarea>
+                    <p>
+                        <button class="primary" @onclick="() => ImportInbox(item)">Importar para @item.Account (@item.Entries lançamentos)</button>
+                        <button @onclick="() => DismissInbox(item)">Descartar</button>
+                    </p>
+                }
+                else
+                {
+                    <p><button @onclick="() => DismissInbox(item)">Descartar</button></p>
+                }
+            </div>
+        }
+    </section>
+}
 
 <section class="card-box wide">
     <h2>Enviar arquivo</h2>
@@ -149,6 +207,23 @@
     {
         <p class="error">@_textError</p>
     }
+    @if (_billImages.Count > 0)
+    {
+        @if (Claude.IsConfigured)
+        {
+            <p>
+                <button @onclick="ReadWithAi" disabled="@_aiBusy">@(_aiBusy ? "Lendo com IA…" : "Ler com IA")</button>
+                <span class="muted"> Envia a imagem à API da Anthropic (sai do seu computador, uso cobrado na sua chave) e troca o texto abaixo.</span>
+            </p>
+        }
+        else
+        {
+            <p class="muted">
+                Quer uma leitura mais precisa? Configure uma chave da API da Anthropic
+                (<code>dotnet user-secrets set "CashPilot:AnthropicApiKey" "sua-chave"</code> em src/CashPilot.Web) e reinicie: aparece o botão "Ler com IA".
+            </p>
+        }
+    }
     <textarea class="paste" rows="10" @bind="_pasted" @bind:event="oninput" placeholder="@ExamplePlaceholder"></textarea>
     <p><button class="primary" @onclick="ImportText">Importar para @(string.IsNullOrWhiteSpace(_source) ? "…" : _source)</button></p>
 
@@ -220,7 +295,8 @@
         {
             try
             {
-                _pasted = await Task.Run(() => ImageReader.Read(bytes));
+                _billImages = new() { bytes };
+                _pasted = (await Task.Run(() => ReadBillImage(bytes))).Text;
                 _fileMessage = "Texto lido da imagem. O reconhecimento pode errar números e letras: confira a caixa "
                                + "\"Fatura de cartão ou extrato (texto)\", mais abaixo, corrija o que precisar, escolha a conta ou o cartão e importe.";
             }
@@ -331,17 +407,101 @@
     private List<string> _sources = new();
     private string _source = "";
     private string _pasted = "";
+    private List<byte[]> _billImages = new();
+    private bool _aiBusy;
     private bool _positiveAreExpenses = true;
     private RulesImportResult? _rules;
     private string? _error;
 
+    private IReadOnlyList<InboxItem> _inbox = Array.Empty<InboxItem>();
+    private readonly Dictionary<long, string> _inboxEdits = new();
+    private bool _inboxBusy;
+    private string? _inboxError;
+
+    private string InboxText(InboxItem item) => _inboxEdits.TryGetValue(item.Id, out var edited) ? edited : item.Text;
+
+    private async Task ScanInbox()
+    {
+        _inboxBusy = true;
+        StateHasChanged();
+        await Inbox.ScanNowAsync();
+        _inboxBusy = false;
+        _inbox = Store.GetOpenInboxItems();
+    }
+
+    private void ImportInbox(InboxItem item)
+    {
+        _inboxError = null;
+        var account = Store.GetAccounts().FirstOrDefault(a => string.Equals(a.Name, item.Account, StringComparison.OrdinalIgnoreCase));
+        var (result, error) = InboxImport.Import(Store, item, InboxText(item), account?.Kind != CashPilot.Domain.Accounts.AccountKind.BankAccount,
+            DateOnly.FromDateTime(DateTime.Today));
+        if (result is null) { _inboxError = error; return; }
+
+        _inboxEdits.Remove(item.Id);
+        _inbox = Store.GetOpenInboxItems();
+        Toasts.Success($"Importado em {item.Account}: {result.Inserted} novos, {result.Duplicates} já existiam.");
+    }
+
+    private void DismissInbox(InboxItem item)
+    {
+        Store.DeleteInboxItem(item.Id);
+        _inboxEdits.Remove(item.Id);
+        _inbox = Store.GetOpenInboxItems();
+    }
+
+    // The folder worker runs on its own thread: when it queues something, this page refreshes its list.
+    private void OnInboxChanged() => _ = InvokeAsync(() =>
+    {
+        _inbox = Store.GetOpenInboxItems();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Inbox.Changed -= OnInboxChanged;
+
     protected override void OnInitialized()
     {
+        _inbox = Store.GetOpenInboxItems();
+        Inbox.Changed += OnInboxChanged;
         _sources = Store.GetAccounts().Select(a => a.Name)
             .Concat(Store.GetAccountNamesInUse())
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(n => n, StringComparer.CurrentCultureIgnoreCase)
             .ToList();
+    }
+
+    /// <summary>OCR of a screenshot; when it looks like a card bill the text is already in "dd/MM DESC R$ amount" lines.</summary>
+    private (string Text, string Message) ReadBillImage(byte[] bytes)
+    {
+        var raw = ImageReader.Read(bytes);
+        var bill = CardBillPdf.FromOcrText(raw);
+        if (bill is { Entries: > 0 })
+            return (bill.Text, $"Fatura lida da imagem: {bill.Entries} lançamentos"
+                         + (bill.Repaired > 0 ? $" ({bill.Repaired} data(s) com o mês refeito pelas linhas vizinhas)" : "")
+                         + ". A leitura óptica pode errar números e letras: confira cada linha, escolha o cartão e importe. Linhas com ?? na data precisam de acerto.");
+        return (raw, "Texto lido da imagem. O reconhecimento pode errar números e letras: confira e corrija antes de importar.");
+    }
+
+    private async Task ReadWithAi()
+    {
+        _aiBusy = true;
+        _textError = null;
+        _textMessage = "Enviando a imagem para a IA…";
+        StateHasChanged();
+        try
+        {
+            var result = await Claude.ReadAsync(_billImages);
+            _pasted = result.Text;
+            _textMessage = $"A IA leu {result.Entries} lançamentos. Confira as linhas, escolha o cartão e importe.";
+        }
+        catch (InvalidOperationException ex)
+        {
+            _textMessage = null;
+            _textError = ex.Message;
+        }
+        finally
+        {
+            _aiBusy = false;
+        }
     }
 
     private async Task LoadText(InputFileChangeEventArgs e)
@@ -350,6 +510,7 @@
         // Messages from this field stay inside its own card: the page-level error is far below and easy to miss.
         _textMessage = null;
         _textError = null;
+        _billImages = new();
         if (e.File.Name.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase) || ImageTextReader.IsImage(e.File.Name))
         {
             byte[] bytes;
@@ -372,8 +533,10 @@
             {
                 if (ImageTextReader.IsImage(e.File.Name))
                 {
-                    _pasted = await Task.Run(() => ImageReader.Read(bytes));
-                    _textMessage = "Texto lido da imagem. O reconhecimento pode errar números e letras: confira e corrija antes de importar.";
+                    _billImages = new() { bytes };
+                    var (imageText, imageMessage) = await Task.Run(() => ReadBillImage(bytes));
+                    _pasted = imageText;
+                    _textMessage = imageMessage;
                     return;
                 }
 
@@ -401,6 +564,7 @@
                     return;
                 }
                 _pasted = result.Text;
+                _billImages = await Task.Run(() => CardBillPdf.ReadPictures(bytes));
                 _textMessage = $"Fatura lida: {result.Entries} lançamentos"
                                + (result.Skipped > 0 ? $" ({result.Skipped} linha(s) de pagamento ou saldo anterior ficaram de fora)" : "")
                                + ". Como o PDF é uma imagem, o texto vem de leitura óptica: confira valores e descrições, escolha o cartão e importe.";

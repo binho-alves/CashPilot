@@ -9,7 +9,7 @@ namespace CashPilot.Infrastructure.Importing;
 /// <param name="Text">One entry per line ("08/10 CIZI MERCADO EXPRESS R$ 35,05"), ready for <see cref="StatementText"/>.</param>
 /// <param name="Entries">How many entries were read.</param>
 /// <param name="Skipped">Lines left out on purpose (payments of the previous bill, which are not purchases).</param>
-public sealed record CardBillPdfResult(string Text, int Entries, int Skipped);
+public sealed record CardBillPdfResult(string Text, int Entries, int Skipped, int Repaired = 0);
 
 /// <summary>
 /// Reads a card bill PDF that has text (the "Extrato da fatura" a bank app exports: Bradesco layout with the columns
@@ -111,30 +111,167 @@ public static partial class CardBillPdf
     /// </summary>
     public static CardBillPdfResult? FromOcrText(string text)
     {
-        var builder = new StringBuilder();
-        int entries = 0, skipped = 0;
+        var entries = new List<OcrEntry>();
+        int skipped = 0;
         foreach (var raw in text.Replace("\r", "").Split('\n'))
         {
-            var match = OcrLineRegex().Match(raw.Trim().TrimStart('|', '[', ']', ' '));
-            if (!match.Success) continue;
+            // Vertical bars come from the row separators of the screenshot, never from a merchant name.
+            var line = Regex.Replace(raw.Replace('|', ' ').Trim().TrimStart('[', ']', ' '), @"\s+", " ");
+            line = FixDate(line);
+
+            var match = OcrLineRegex().Match(line);
+            string? date = null;
+            if (match.Success) date = match.Groups["date"].Value;
+            else
+            {
+                // The date came out garbled ("08M0": the slash and the 1 of the month were lost): the day is still the
+                // first two characters, the month is rebuilt from the neighbors below.
+                var garbled = GarbledDateRegex().Match(line);
+                if (!garbled.Success) continue;
+                match = OcrLineRegex().Match("00/00 " + garbled.Groups["rest"].Value);
+                if (!match.Success) continue;
+                date = null;
+                line = garbled.Groups["d"].Value.Replace('O', '0').Replace('o', '0');
+            }
 
             var description = Regex.Replace(match.Groups["desc"].Value.Trim(), @"\s+", " ");
             if (description.Length == 0) continue;
             if (IsNotAPurchase(description)) { skipped++; continue; }
 
             var negative = match.Groups["neg1"].Success || match.Groups["neg2"].Success;
-            builder.Append(match.Groups["date"].Value).Append(' ').Append(description).Append(' ')
-                .Append(negative ? "-R$ " : "R$ ").Append(match.Groups["amt"].Value).Append('\n');
-            entries++;
+            var day = date is null ? int.Parse(line, CultureInfo.InvariantCulture) : int.Parse(date.Split('/')[0], CultureInfo.InvariantCulture);
+            var month = date?.Split('/')[1];
+            entries.Add(new OcrEntry(date, day, month, description, negative, match.Groups["amt"].Value));
         }
-        return entries == 0 && skipped == 0 ? null : new CardBillPdfResult(builder.ToString(), entries, skipped);
+
+        // No line with a readable date: maybe the list layout that groups purchases by day (see FromListText).
+        if (entries.All(e => e.Date is null) && FromListText(text) is { } list) return list;
+
+        var repaired = 0;
+        for (var i = 0; i < entries.Count; i++)
+        {
+            if (entries[i].Date is not null) continue;
+            var neighbor = NearestKnown(entries, i);
+            if (neighbor is { } known && Math.Abs(known.Day - entries[i].Day) <= 15)
+            {
+                entries[i] = entries[i] with { Month = known.Month };
+                repaired++;
+            }
+        }
+
+        var builder = new StringBuilder();
+        foreach (var e in entries)
+        {
+            var date = e.Date ?? (e.Month is null ? $"{e.Day:00}/??" : $"{e.Day:00}/{e.Month}");
+            builder.Append(date).Append(' ').Append(e.Description).Append(' ')
+                .Append(e.Negative ? "-R$ " : "R$ ").Append(e.Amount).Append('\n');
+        }
+        return entries.Count == 0 && skipped == 0 ? null : new CardBillPdfResult(builder.ToString(), entries.Count, skipped, repaired);
     }
+
+    /// <summary>
+    /// The other layout, used by apps that group purchases by day (a header "Data, Descrição, Valor"; the day number on the
+    /// first purchase of the day with the month name under it, a timeline dot before each description, "R$ 15,99 &gt;" at the end):
+    ///   10 O CIZI MERCADO EXPR R$ 15,99 &gt;
+    ///   Out
+    ///   O CAFE SOL GELATERIA R$ 88,99 &gt;
+    /// A purchase without a day belongs to the day above it; the month comes from the month name of its group (or the group above).
+    /// </summary>
+    private static CardBillPdfResult? FromListText(string text)
+    {
+        var items = new List<(int Group, string Desc, bool Negative, string Amount)>();
+        var groupDay = new List<int?>();
+        var groupMonth = new List<int?>();
+        int? pendingMonth = null;
+        int skipped = 0;
+
+        foreach (var raw in text.Replace("\r", "").Split('\n'))
+        {
+            var line = Regex.Replace(raw.Replace('|', ' ').Trim(), @"\s+", " ");
+            if (line.Length == 0) continue;
+
+            var monthName = MonthLineRegex().Match(line.Replace('0', 'o').Replace('O', 'o'));
+            if (monthName.Success)
+            {
+                var number = Array.IndexOf(MonthNames, monthName.Groups["m"].Value.ToLowerInvariant()) + 1;
+                if (groupMonth.Count > 0 && groupMonth[^1] is null) groupMonth[^1] = number;
+                else pendingMonth = number;
+                continue;
+            }
+
+            var match = ListLineRegex().Match(line);
+            if (!match.Success) continue;
+            var description = Regex.Replace(match.Groups["desc"].Value.Trim(), @"\s+", " ");
+            if (description.Length == 0) continue;
+            if (IsNotAPurchase(description)) { skipped++; continue; }
+
+            if (match.Groups["day"].Success && int.TryParse(match.Groups["day"].Value, out var day) && day is >= 1 and <= 31)
+            {
+                groupDay.Add(day);
+                groupMonth.Add(pendingMonth);
+                pendingMonth = null;
+            }
+            else if (groupDay.Count == 0)
+            {
+                groupDay.Add(null);   // purchases before any day header: the day is unknown
+                groupMonth.Add(pendingMonth);
+                pendingMonth = null;
+            }
+
+            items.Add((groupDay.Count - 1, description, match.Groups["neg1"].Success || match.Groups["neg2"].Success, match.Groups["amt"].Value));
+        }
+        if (items.Count == 0 && skipped == 0) return null;
+
+        var repaired = 0;
+        var builder = new StringBuilder();
+        foreach (var item in items)
+        {
+            var month = groupMonth[item.Group];
+            var inherited = false;
+            for (var g = item.Group - 1; month is null && g >= 0; g--) { month = groupMonth[g]; inherited = month is not null; }
+            if (inherited) repaired++;
+
+            var day = groupDay[item.Group];
+            var date = (day is null ? "??" : $"{day:00}") + "/" + (month is null ? "??" : $"{month:00}");
+            builder.Append(date).Append(' ').Append(item.Desc).Append(' ')
+                .Append(item.Negative ? "-R$ " : "R$ ").Append(item.Amount).Append('\n');
+        }
+        return new CardBillPdfResult(builder.ToString(), items.Count, skipped, repaired);
+    }
+
+    private static readonly string[] MonthNames = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
+
+    [GeneratedRegex(@"^(?<m>jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)[a-z]*\.?$", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
+    private static partial Regex MonthLineRegex();
+
+    // [day + dot] [dot] DESCRIPTION [-]R$ amount [>]. The dot of the timeline is read as O, o, ©, 0, a bullet...; the arrow as > or something alike.
+    [GeneratedRegex(
+        @"^(?:(?<day>\d{1,2})\s+[OoÓ©°•@Q0(]{1,2}\s+|[OoÓ©°•@Q0(]{1,2}\s+)?(?<desc>.+?)\s+(?<neg1>-\s*)?R[\$S§]?\s*(?<neg2>-\s*)?(?<amt>(?:\d{1,3}(?:\.\d{3})+|\d+),\d{2})\s*[>›»)\]]?$",
+        RegexOptions.CultureInvariant)]
+    private static partial Regex ListLineRegex();
+
+    private sealed record OcrEntry(string? Date, int Day, string? Month, string Description, bool Negative, string Amount);
+
+    /// <summary>The closest entry with a readable date (the one above first), for rebuilding a damaged month.</summary>
+    private static (int Day, string Month)? NearestKnown(List<OcrEntry> entries, int index)
+    {
+        for (var distance = 1; distance < entries.Count; distance++)
+        {
+            foreach (var j in new[] { index - distance, index + distance })
+                if (j >= 0 && j < entries.Count && entries[j].Date is not null)
+                    return (entries[j].Day, entries[j].Month!);
+        }
+        return null;
+    }
+
+    [GeneratedRegex(@"^(?<d>[0-3Oo][\dOo])[^\s]{0,4}\s+(?<rest>.+)$", RegexOptions.CultureInvariant)]
+    private static partial Regex GarbledDateRegex();
 
     /// <summary>
     /// The page pictures of a PDF, each distinct picture once (an app that prints a long screenshot over several pages
     /// repeats the same image on every page, and reading it three times would triple the entries).
     /// </summary>
-    private static List<byte[]> ReadPictures(byte[] pdf)
+    public static List<byte[]> ReadPictures(byte[] pdf)
     {
         var result = new List<byte[]>();
         var seen = new HashSet<string>();
@@ -159,6 +296,21 @@ public static partial class CardBillPdf
         }
         return result;
     }
+
+    /// <summary>OCR often drops the slash or reads a zero as the letter O: "0810", "O8/1O" become "08/10".</summary>
+    private static string FixDate(string line)
+    {
+        var m = DamagedDateRegex().Match(line);
+        if (!m.Success) return line;
+        string Digits(string v) => v.Replace('O', '0').Replace('o', '0');
+        var day = Digits(m.Groups["d"].Value);
+        var month = Digits(m.Groups["m"].Value);
+        if (!int.TryParse(day, out var d) || !int.TryParse(month, out var mo) || d is < 1 or > 31 || mo is < 1 or > 12) return line;
+        return day + "/" + month + line[m.Length..];
+    }
+
+    [GeneratedRegex(@"^(?<d>[0-3Oo][\dOo])[/\\|]?(?<m>[01Oo][\dOo])(?=\s)", RegexOptions.CultureInvariant)]
+    private static partial Regex DamagedDateRegex();
 
     [GeneratedRegex(
         @"^(?<date>\d{1,2}/\d{2})\s+(?<desc>.+?)\s+(?:[A-Z]{3}\s+[\d.,]+\s+R[\$S§]?\s*[\d.,]+\s+)?(?<neg1>-\s*)?R[\$S§]?\s*(?<neg2>-\s*)?(?<amt>(?:\d{1,3}(?:\.\d{3})+|\d+),\d{2})$",

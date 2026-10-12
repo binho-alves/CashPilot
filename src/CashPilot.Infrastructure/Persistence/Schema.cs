@@ -148,6 +148,21 @@ internal static class Schema
         """
         ALTER TABLE accounts ADD COLUMN parent_card TEXT NULL;
         """,
+
+        // v13: queue of files found in the watched folder, waiting for the user to check them before they are imported.
+        """
+        CREATE TABLE inbox_items (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            account    TEXT    NOT NULL,
+            file_name  TEXT    NOT NULL,
+            file_hash  TEXT    NOT NULL UNIQUE,
+            status     TEXT    NOT NULL,
+            text       TEXT    NOT NULL DEFAULT '',
+            entries    INTEGER NOT NULL DEFAULT 0,
+            note       TEXT    NULL,
+            created_at TEXT    NOT NULL
+        );
+        """,
     ];
 
     public static void Apply(SqliteConnection connection)
